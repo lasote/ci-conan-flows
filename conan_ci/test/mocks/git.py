@@ -3,7 +3,7 @@ import subprocess
 import tempfile
 from typing import Dict
 
-from conan_ci.tools import chdir
+from conan_ci.tools import chdir, load
 
 
 class GitRepo(object):
@@ -23,6 +23,7 @@ class GitRepo(object):
     def init(self):
         self.run("git init .")
         self.config()
+        self.run("git co -b develop")
 
     def config(self):
         self.run("git config user.email you@example.com")
@@ -43,6 +44,9 @@ class GitRepo(object):
 
     def checkout_copy(self, branch_name: str):
         self.run("git checkout -b {}".format(branch_name))
+
+    def read_file(self, filename):
+        return load(os.path.join(self.folder, filename))
 
     def commit_files(self, files_contents: Dict[str, str], message: str):
         for file, contents in files_contents.items():

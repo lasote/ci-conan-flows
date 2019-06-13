@@ -1,184 +1,200 @@
 import json
 import os
-from typing import List
+import shutil
+import tempfile
 
-import time
-
-from conan_ci.artifactory import Artifactory, ArtifactoryRepo
-from conan_ci.tools import chdir
-
-
-def ci_run(folder, travis_api, dest_branch: str, artifactory_url: str, artifactory_user: str,
-           artifactory_password: str):
-    action = os.getenv("ACTION")
-    current_slug = os.getenv("TRAVIS_REPO_SLUG")
-    commit = os.getenv("TRAVIS_COMMIT")
-    art = Artifactory(artifactory_url, artifactory_user, artifactory_password)
-    runner = CIRunner(folder, travis_api)
-
-    if action is None:
-        unique_id = "{}_{}".format(current_slug.replace("/", "_"), commit)
-        repo_origin = art.create_repo(unique_id)
-        repo_dest = art.get_repo(dest_branch)
-        repo_meta = art.get_repo("meta")
-        runner.pr_build(current_slug, repo_origin, repo_dest, repo_meta, dest_branch)
-    elif action == "LOCKFILES":
-        repo_origin = art.get_repo(os.getenv("REPO_ORIGIN"))
-        repo_dest = art.get_repo(os.getenv("REPO_DEST"))
-        repo_meta = art.get_repo(os.getenv("REPO_META"))
-        reference = os.getenv("REFERENCE")
-        profiles = repo_meta.list_files("profiles")
-        runner.get_project_lockfile_and_orders(reference, current_slug, repo_origin, repo_dest,
-                                               repo_meta, profiles)
-    elif action == "CREATE":
-        repo_origin = art.get_repo(os.getenv("REPO_ORIGIN"))
-        repo_dest = art.get_repo(os.getenv("REPO_DEST"))
-        lockfile_path = os.getenv("LOCKFILE")
-        reference = os.getenv("REFERENCE")
-        runner.intermediate_node_build(reference, repo_origin, repo_dest, lockfile_path)
+from conan_ci.artifactory import Artifactory
+from conan_ci.tools import chdir, run_command
 
 
-class CIRunner(object):
+class BuildPackageJob(object):
 
-    def __init__(self, folder, travis_api):
-        self.folder = folder
-        self.travis_api = travis_api
+    def __init__(self):
 
-    def run(self, command: str):
-        with chdir(self.folder):
-            ret = os.system(command)
-            if ret != 0:
-                raise Exception("Command failed: {}".format(command))
+        art_url = os.environ["ARTIFACTORY_URL"]
+        art_user = os.environ["ARTIFACTORY_USER"]
+        art_password = os.environ["ARTIFACTORY_PASSWORD"]
+        art = Artifactory(art_url, art_user, art_password)
+
+        self.repo_read = art.get_repo(os.environ["CONAN_CI_READ_REMOTE_NAME"])
+        self.repo_upload = art.get_repo(os.environ["CONAN_CI_UPLOAD_REMOTE_NAME"])
+        self.results_remote_path = os.environ["CONAN_CI_REMOTE_RESULTS_PATH"]
+        self.project_lock_remote_path = os.environ["CONAN_CI_PROJECT_LOCK_PATH"]
+        self.repo_meta = art.get_meta()
+        self.ref = os.environ["CONAN_CI_REFERENCE"]
+
+    def run(self):
+        print("\n\n\n------------------------------------------------------")
+        print("BUILDING '{}' AT '{}'".format(self.ref, os.getcwd()))
+        build_folder = os.getcwd()
+        try:
+            run_command('conan remote remove conan-center')
+        except Exception:
+            pass
+        run_command('conan remote add upload_remote {}'.format(self.repo_read.url))
+        run_command('conan remote add central_remote {}'.format(self.repo_upload.url))
+
+        # Download the lock file to the install folder
+        self.repo_meta.download_node_lock(self.project_lock_remote_path, build_folder)
+        run_command("conan graph clean-modified {}".format(build_folder))
+        run_command('conan remove "*" -f')
+
+        # Build the ref using the lockfile
+        run_command("conan install {} --install-folder {} "
+                    "--use-lock --build {}".format(self.ref, build_folder, self.ref))
+        # self.repo_meta.store_install_log(self.results_remote_path, output.decode())
+
+        # Upload the packages
+        run_command('conan upload {} --all -r upload_remote'.format(self.ref))
+
+        # Upload the modified lockfile to the right location
+        self.repo_meta.store_node_lock(build_folder, self.results_remote_path)
+        print("\n\n\n------------------------------------------------------")
+
+
+class MainJob(object):
+
+    def __init__(self, ci_adapter, ci_caller):
+
+        self.ci_adapter = ci_adapter
+        self.ci_caller = ci_caller
+
+        art_url = os.getenv("ARTIFACTORY_URL")
+        art_user = os.getenv("ARTIFACTORY_USER")
+        art_password = os.getenv("ARTIFACTORY_PASSWORD")
+
+        current_slug = ci_adapter.get_key("slug")
+        pr_number = ci_adapter.get_key("pr_number")
+        commit = ci_adapter.get_key("commit")
+        dest_branch = ci_adapter.get_key("dest_branch")
+        build_number = ci_adapter.get_key("build_number")
+
+        art = Artifactory(art_url, art_user, art_password)
+
+        self.build_unique_id = "{}_PR{}_{}_{}".format(current_slug.replace("/", "_"), pr_number,
+                                                      commit, build_number)
+        self.repo_read = art.create_repo(self.build_unique_id)
+        self.repo_upload = art.get_repo(dest_branch)
+        self.repo_meta = art.get_meta()
+
+        self.checkout_folder = os.getcwd()
+
+    def run(self):
+
+
+        try:
+            run_command('conan remote remove conan-center')
+        except Exception:
+            pass
+        run_command('conan remote add upload_remote {}'.format(self.repo_read.url))
+        run_command('conan remote add central_remote {}'.format(self.repo_upload.url))
+
+        profiles_names = self.repo_meta.get_profile_names()
+        projects_refs = self.repo_meta.get_projects_refs()
+        # Run N conan-create in parallel, one per lockfile
+        # TODO: We should do here the same than c3i, infos to calculate
+        #  different package id?
+        #  conan info <ref> -if=<path_to_lock> --use-lock --json
+        for project_ref in projects_refs:
+            for profile_name in profiles_names:
+                install_folder = os.getcwd()
+
+                # Generate the lock file for the project
+                self.generate_lockfile(project_ref, profile_name)
+
+                # Download the lock file to the install folder
+                self.download_lockfile(project_ref, profile_name, install_folder)
+                run_command('conan remove "*" -f')
+
+                # Get the reference of the node being modified
+                name, version = self.inspect_name_and_version(self.checkout_folder)
+                ref = "{}/{}@conan/stable".format(name, version)
+                run_command("conan create {} {} "
+                            "--install-folder {} "
+                            "--use-lock".format(self.checkout_folder, ref, install_folder))
+                run_command('conan upload {} --all -r upload_remote'.format(ref))
+
+                # Get the build order for that lock
+                groups = self.get_build_order(install_folder)
+
+                # Update and clean main lock
+                self.update_lockfile(project_ref, profile_name, install_folder)
+
+                # Remote lock file path
+                project_lock_path = self.repo_meta.project_lock_path(self.build_unique_id,
+                                                                     project_ref,
+                                                                     profile_name)
+                for group in groups:
+                    group_pids = []
+                    # Build the nodes
+                    for node_id, ref in group:
+                        print("Buildeo {}".format(ref))
+                        ref = ref.split(":")[0].split("#")[0]
+                        remote_results_path = self.repo_meta.node_lock_path(self.build_unique_id,
+                                                                            project_ref,
+                                                                            profile_name, ref,
+                                                                            node_id)
+
+                        pid = self.ci_caller.call_build(node_id, ref, project_lock_path,
+                                                        remote_results_path, self.repo_read.name,
+                                                        self.repo_upload.name)
+                        group_pids.append(pid)
+
+                    self.ci_caller.wait(group_pids)
+
+                    for node_id, ref in group:
+                        # Get the generated lockfile
+                        ref = ref.split(":")[0].split("#")[0]
+                        remote_results_path = self.repo_meta.node_lock_path(self.build_unique_id,
+                                                                            project_ref,
+                                                                            profile_name, ref,
+                                                                            node_id)
+                        tmp_path = tempfile.mkdtemp()
+                        self.repo_meta.download_node_lock(remote_results_path, tmp_path)
+
+                        # Update and clean main lock
+                        self.update_lockfile(project_ref, profile_name, tmp_path)
+                        shutil.rmtree(tmp_path)
 
     @staticmethod
-    def _extract_created_ref(json_path):
+    def inspect_name_and_version(folder):
+        json_path = os.path.join(folder, "nv.json")
+        run_command("conan inspect {} -a name -a version --json {}".format(folder, json_path))
         with open(json_path) as f:
             c = f.read()
-            data = json.loads(c)
-            installed = data["installed"]
-            for item in installed:
-                if item["recipe"]["exported"]:
-                    return item["recipe"]["id"]
-            return None
-
-    def pr_build(self, current_slug: str, repo_origin: ArtifactoryRepo, repo_dest: ArtifactoryRepo,
-                 repo_meta: ArtifactoryRepo, dest_branch: str):
-        repo_origin.set_properties({"time": [str(time.time())]})
-        # For the final merge, to know the latest commit???
-
-        # ERROR! we don't want to build this package because maybe we are building incorrect ones
-        # unless we want to build it to run the tests and so on!
-
-        # Build the package for all the profiles located in the meta repository
-        self.run('conan remote remove conan-center')
-        self.run('conan remote add upload_remote {}'.format(repo_origin.url))
-        self.run('conan remote add central_remote {}'.format(repo_dest.url))
-        profiles_names = repo_meta.list_files("profiles")
-
-        ref = ""
-        for profile_name in profiles_names:
-            profile_path = repo_meta.download_file(self.profile_path(profile_name), self.folder)
-            self.run('conan create . conan/stable --profile {} --json xx.json'.format(profile_path))
-            ref = self._extract_created_ref(os.path.join(self.folder, "xx.json"))
-            self.run('conan upload {} -r upload_remote --all -c'.format(ref))
-
-        # Read the project sleeves
-        p = repo_meta.read_file("projects.json")
-        project_slugs = json.loads(p)["projects"]
-
-        # Generate the graph-locks and the build orders using the project leaves
-        build_ids = []
-        for slug in project_slugs:
-            env = {"ACTION": "LOCKFILES",
-                   "REFERENCE": ref,
-                   "REPO_ORIGIN": repo_origin.name,
-                   "REPO_DEST": repo_dest.name,
-                   "REPO_META": repo_meta.name}
-            build_id = self.travis_api.call_build(slug, dest_branch, env=env)
-            build_ids.append(build_id)
-
-        self.travis_api.wait(build_ids)
-
-        # Launch the individual builds following the order and applying the graph_lock
-        build_ids = []
-        for slug in project_slugs:
-            for profile_name in profiles_names:
-                order = self.read_order(repo_origin, slug, profile_name)
-                for group in order:
-                    for lib in group:
-                        if ref.startswith(lib):  # Ignore RREV
-                            lib_repo_slug = current_slug
-                        else:
-                            # FIXME: Correlate slugs and refs?
-                            lib_repo_slug = "company/{}".format(lib.split("/")[0])
-                        env = {"LOCKFILE": self.lockfile_name(slug, profile_name),
-                               "ACTION": "CREATE",
-                               "REFERENCE": lib,
-                               "REPO_ORIGIN": repo_origin.name,
-                               "REPO_DEST": repo_dest.name,
-                               "REPO_META": repo_meta.name}
-                        build_id = self.travis_api.call_build(lib_repo_slug, dest_branch, env)
-                        # Redirect and capture the output?
-                        build_ids.append(build_id)
-
-        self.travis_api.wait(build_ids)
+        os.unlink(json_path)
+        data = json.loads(c)
+        installed = data["name"]
+        version = data["version"]
+        return installed, version
 
     @staticmethod
-    def read_order(repo: ArtifactoryRepo, project_slug: str, profile_name: str):
-        t = repo.read_file(CIRunner.build_order_name(project_slug, profile_name))
-        data = json.loads(t)["groups"]
-        return data
+    def get_build_order(install_folder):
+        with chdir(install_folder):
+            json_path = os.path.join(install_folder, "bo.json")
+            run_command('conan graph build-order . --json {}'.format(json_path))
+            with open(json_path) as f:
+                data = json.load(f)
+                return data
 
-    @staticmethod
-    def lockfile_name(project_slug, profile_name):
-        return "{}-{}.lock".format(project_slug.replace("/", "-"), profile_name)
+    def download_lockfile(self, ref, profile_name, dest_folder):
+        remote_path = self.repo_meta.project_lock_path(self.build_unique_id, ref, profile_name)
+        self.repo_meta.download_node_lock(remote_path, dest_folder)
 
-    @staticmethod
-    def build_order_name(project_slug, profile_name):
-        return "{}-{}-order.json".format(project_slug.replace("/", "-"), profile_name)
+    def generate_lockfile(self, ref, profile_name):
+        tmp_path = tempfile.mkdtemp()
+        profile_path = self.repo_meta.download_profile(profile_name, tmp_path)
+        run_command("conan graph lock {} "
+                    "--profile {} --install-folder {}".format(ref, profile_path, tmp_path))
+        remote_path = self.repo_meta.project_lock_path(self.build_unique_id, ref, profile_name)
+        self.repo_meta.store_node_lock(tmp_path, remote_path)
+        shutil.rmtree(tmp_path)
 
-    @staticmethod
-    def profile_path(profile_name):
-        return "profiles/{}".format(profile_name)
+    def update_lockfile(self, project_ref, profile_name, origin_folder):
+        tmp_path = tempfile.mkdtemp()
+        self.download_lockfile(project_ref, profile_name, tmp_path)
+        run_command("conan graph update-lock {} {}".format(tmp_path, origin_folder))
+        remote_path = self.repo_meta.project_lock_path(self.build_unique_id, project_ref,
+                                                       profile_name)
+        self.repo_meta.store_node_lock(tmp_path, remote_path)
 
-    def get_project_lockfile_and_orders(self, reference: str, slug: str, repo_origin: ArtifactoryRepo,
-                                        repo_dest: ArtifactoryRepo,
-                                        repo_meta: ArtifactoryRepo, profiles_names: List):
-        self.run('conan remote remove conan-center')
-        self.run('conan remote add upload_remote {}'.format(repo_origin.url))
-        self.run('conan remote add central_remote {}'.format(repo_dest.url))
-        for profile_name in profiles_names:
-            clean_dir = os.path.join(self.folder, profile_name)
-            os.mkdir(clean_dir)
-            self.folder = clean_dir
-            lock_name = os.path.join(clean_dir, self.lockfile_name(slug, profile_name))
-            build_order_name = os.path.join(clean_dir, self.build_order_name(slug, profile_name))
-            profile_path = repo_meta.download_file(self.profile_path(profile_name), clean_dir)
-            # self.run("conan install --generate-lockfile={}.lock
-            # --profile {}".format(lock_name, profile_path))
-
-            # ###### FAKED LOCKFILE ONLY PROFILE #########
-            self.run("conan install .. --profile {}".format(profile_path))
-            with open(lock_name, "wb") as f:
-                f.write(repo_meta.read_file(self.profile_path(profile_name)))
-            #############################################
-            repo_origin.deploy(lock_name, os.path.basename(lock_name))
-            # ##### FAKED USAGE OF THE LOCKFILE, ONLY THE PROFILE ########
-            ref = reference.split("#")[0]  # Remove revision
-            self.run("conan info .. --build-order {} "
-                     "--profile {} "
-                     "--json {}".format(ref, lock_name, build_order_name))
-            ##############################################
-            repo_origin.deploy(build_order_name, os.path.basename(build_order_name))
-
-    def intermediate_node_build(self, reference: str, repo_origin: ArtifactoryRepo,
-                                repo_dest: ArtifactoryRepo, lockfile_path: str):
-        self.run('conan remote remove conan-center')
-        self.run('conan remote add upload_remote {}'.format(repo_origin.url))
-        self.run('conan remote add central_remote {}'.format(repo_dest.url))
-        path = repo_origin.download_file(lockfile_path, self.folder)
-        # ########## MOCKED LOCKFILE WITH PROFILE
-        # self.run('conan create {} conan/stable --lockfile {}'.format(reference, path))
-        self.run('conan create . {} --profile {}'.format(reference, path))
-        # #######################################
-        self.run('conan upload {} --all -r upload_repo'.format(reference))

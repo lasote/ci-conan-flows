@@ -1,4 +1,5 @@
 import os
+import subprocess
 from contextlib import contextmanager
 
 
@@ -39,3 +40,20 @@ def chdir(newdir):
     finally:
         os.chdir(old_path)
 
+
+def run_command(command):
+    print(command)
+    ret = os.system(command)
+    if ret != 0:
+        raise Exception()
+
+
+def run_command_output(command):
+    return subprocess.check_output(command, stderr=subprocess.STDOUT, shell=True)
+
+
+def load(path, binary=False):
+    """ Loads a file content """
+    with open(path, 'rb') as handle:
+        tmp = handle.read()
+        return tmp if binary else tmp.decode()
