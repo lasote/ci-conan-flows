@@ -58,12 +58,12 @@ build_type=Release
 linux_gcc7_32 = linux_gcc7_64.replace("x86_64", "x86")
 
 
-travis_env = { "CONAN_LOGIN_USERNAME": "admin",
-               "CONAN_PASSWORD": "password",
-               "ARTIFACTORY_URL": "http://localhost:8090/artifactory",
-               "ARTIFACTORY_USER": "admin",
-               "ARTIFACTORY_PASSWORD": "password",
-               "CONAN_REVISIONS_ENABLED": "1"}
+travis_env = {"CONAN_LOGIN_USERNAME": "admin",
+              "CONAN_PASSWORD": "password",
+              "ARTIFACTORY_URL": "http://localhost:8090/artifactory",
+              "ARTIFACTORY_USER": "admin",
+              "ARTIFACTORY_PASSWORD": "password",
+              "CONAN_REVISIONS_ENABLED": "1"}
 
 
 class TestBasic(unittest.TestCase):
@@ -114,7 +114,7 @@ class TestBasic(unittest.TestCase):
         reqs_str = ",".join('"{}"'.format(r) for r in reqs)
         reqs_line = 'requires = {}'.format(reqs_str) if reqs else ""
         cf = conanfile.format(name, version, reqs_line, rand)
-        files = {"conanfile.py": cf, "myfile.txt": "From {}".format(ref)}
+        files = {"conanfile.py": cf, "myfile.txt": "Original content: {}".format(ref)}
 
         # Register the repo on Github
         repo = self.github.create_repository(slug, files)
@@ -200,17 +200,19 @@ class TestBasic(unittest.TestCase):
         # Create a branch on AA an open pull request
         repo = self.github.repos[self.get_slug("AA")]
         repo.checkout_copy("feature/cool1")
-        cf = repo.read_file("conanfile.py")
-        repo.commit_files({"conanfile.py": cf + "\n\n"}, "Here we go!")
+        message_commit = "Here we go!"
+        repo.commit_files({"myfile.txt": "Modified myfile: pepe"}, message_commit)
 
         # Generate binary for EE merging the PR
         # pr_number = self.github.open_pull_request("lasote/EE", "company/EE")
         # self.github.merge_pull_request(pr_number)
 
         # We don't use forks because the env vars wouldn't be available
-        self.github.open_pull_request("company/AA", "develop", "company/AA", "feature/cool1")
+        pr_number = self.github.open_pull_request("company/AA", "develop", "company/AA", "feature/cool1")
 
+        self.github.merge_pull_request(pr_number)
         # TODO: asserts
+        print("Breakpoint")
 
 
 

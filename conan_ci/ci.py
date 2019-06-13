@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import tempfile
 
@@ -52,6 +53,14 @@ class BuildPackageJob(object):
         print("\n\n\n------------------------------------------------------")
 
 
+def get_pull_request_from_message(commit_message):
+    node_regex = re.compile(r'.*#(\d+).*')
+    ret = node_regex.match(commit_message)
+    if not ret:
+        return None
+    return ret.group(1)
+
+
 class MainJob(object):
 
     def __init__(self, ci_adapter, ci_caller):
@@ -63,24 +72,57 @@ class MainJob(object):
         art_user = os.getenv("ARTIFACTORY_USER")
         art_password = os.getenv("ARTIFACTORY_PASSWORD")
 
-        current_slug = ci_adapter.get_key("slug")
-        pr_number = ci_adapter.get_key("pr_number")
-        commit = ci_adapter.get_key("commit")
-        dest_branch = ci_adapter.get_key("dest_branch")
-        build_number = ci_adapter.get_key("build_number")
+        self.art = Artifactory(art_url, art_user, art_password)
 
-        art = Artifactory(art_url, art_user, art_password)
+    def run(self):
+        try:
+            self.ci_adapter.get_key("pr_number")
+            self.run_pr()
+        except KeyError:
+            message = self.ci_adapter.get_key("commit_message")
+            if message.startswith("Merged PR"):
+                pr_number = get_pull_request_from_message(message)
+                self.run_merge(pr_number)
+
+    def run_pr(self):
+        job = PRJob(self.art, self.ci_adapter, self.ci_caller)
+        job.run()
+
+    def run_merge(self, pr_number):
+
+        print("Merging {}".format(pr_number))
+        # Copy the packages to the other repo
+
+        # Repeat the build in develop
+
+        pass
+
+    def run_job(self):
+        pass
+
+
+class PRJob(object):
+
+    def __init__(self, art, ci_adapter, ci_caller):
+        self.art = art
+        self.ci_adapter = ci_adapter
+        self.ci_caller = ci_caller
+        self.repo_meta = self.art.get_meta()
+
+        current_slug = self.ci_adapter.get_key("slug")
+        pr_number = self.ci_adapter.get_key("pr_number")
+        commit = self.ci_adapter.get_key("commit")
+        dest_branch = self.ci_adapter.get_key("dest_branch")
+        build_number = self.ci_adapter.get_key("build_number")
 
         self.build_unique_id = "{}_PR{}_{}_{}".format(current_slug.replace("/", "_"), pr_number,
                                                       commit, build_number)
-        self.repo_read = art.create_repo(self.build_unique_id)
-        self.repo_upload = art.get_repo(dest_branch)
-        self.repo_meta = art.get_meta()
 
+        self.repo_upload = self.art.get_repo(dest_branch)
+        self.repo_read = self.art.create_repo(self.build_unique_id)
         self.checkout_folder = os.getcwd()
 
     def run(self):
-
 
         try:
             run_command('conan remote remove conan-center')

@@ -112,6 +112,15 @@ class TravisMock(object):
         local_repo.clone(self.repos[slug].folder)
         local_repo.checkout(branch)
 
+        travis_env = {"TRAVIS_COMMIT_MESSAGE": commit_message,
+                      "TRAVIS_BUILD_DIR": local_repo.folder,
+                      "TRAVIS_COMMIT": local_repo.get_commit(),
+                      "TRAVIS_REPO_SLUG": slug,
+                      "TRAVIS_BUILD_NUMBER": "1"}
+
+        api_environ.update(travis_env)
+        api_environ.update(self.env_vars[slug])
+
         with environment_append(api_environ):
             with chdir(build_folder):
                 self.actions[slug]()
