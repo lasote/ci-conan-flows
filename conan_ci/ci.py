@@ -9,6 +9,7 @@ from conan_ci.tools import chdir, run_command
 
 
 class BuildPackageJob(object):
+    """To build a single node using a lockfile"""
 
     def __init__(self):
 
@@ -62,6 +63,7 @@ def get_pull_request_from_message(commit_message):
 
 
 class MainJob(object):
+    """To attend a PR or a regular build of a branch"""
 
     def __init__(self, ci_adapter, ci_caller):
 
@@ -80,9 +82,11 @@ class MainJob(object):
             self.run_pr()
         except KeyError:
             message = self.ci_adapter.get_key("commit_message")
-            if message.startswith("Merged PR"):
-                pr_number = get_pull_request_from_message(message)
+            pr_number = get_pull_request_from_message(message)
+            if pr_number:
                 self.run_merge(pr_number)
+            else:
+                self.run_job()
 
     def run_pr(self):
         job = PRJob(self.art, self.ci_adapter, self.ci_caller)
@@ -94,10 +98,10 @@ class MainJob(object):
         # Copy the packages to the other repo
 
         # Repeat the build in develop
-
-        pass
+        self.run_job()
 
     def run_job(self):
+        """Regular job, push to develop for example"""
         pass
 
 
@@ -105,15 +109,14 @@ class PRJob(object):
 
     def __init__(self, art, ci_adapter, ci_caller):
         self.art = art
-        self.ci_adapter = ci_adapter
         self.ci_caller = ci_caller
         self.repo_meta = self.art.get_meta()
 
-        current_slug = self.ci_adapter.get_key("slug")
-        pr_number = self.ci_adapter.get_key("pr_number")
-        commit = self.ci_adapter.get_key("commit")
-        dest_branch = self.ci_adapter.get_key("dest_branch")
-        build_number = self.ci_adapter.get_key("build_number")
+        current_slug = ci_adapter.get_key("slug")
+        pr_number = ci_adapter.get_key("pr_number")
+        commit = ci_adapter.get_key("commit")
+        dest_branch = ci_adapter.get_key("dest_branch")
+        build_number = ci_adapter.get_key("build_number")
 
         self.build_unique_id = "{}_PR{}_{}_{}".format(current_slug.replace("/", "_"), pr_number,
                                                       commit, build_number)
