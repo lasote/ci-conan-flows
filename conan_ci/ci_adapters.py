@@ -1,4 +1,5 @@
 import os
+from collections import namedtuple
 
 
 class TravisCIAdapter(object):
@@ -19,3 +20,6 @@ class TravisAPICaller(object):
     def __init__(self):
         raise NotImplementedError("Still not implemented, look at "
                                   "https://github.com/lasote/build_node")
+
+
+NodeBuilding = namedtuple("NodeBuilding", "node_id ref lock_path element")

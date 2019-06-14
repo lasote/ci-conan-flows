@@ -71,16 +71,21 @@ class TestBasic(unittest.TestCase):
     def setUp(self):
         self.art = Artifactory("http://localhost:8090/artifactory", "admin", "password")
         self.repo_develop = self.art.create_repo("develop")
-        self.repo_meta = self.art.create_repo("meta")
         self.travis = TravisMock()
         self.github = GithubMock(self.travis)
+        try:
+            self.repo_meta = self.art.create_repo("meta")
+        except:
+            meta = self.art.get_repo("meta")
+            meta.remove()
+            self.repo_meta = self.art.create_repo("meta")
 
     def tearDown(self):
-        self.repo_meta.remove()
         self.repo_develop.remove()
         repos = self.art.list_repos()
         for r in repos:
-            r.remove()
+            if r.name != "meta":
+                r.remove()
 
     def _store_meta(self, profiles, project_refs):
         for name, contents in profiles.items():
@@ -174,17 +179,16 @@ class TestBasic(unittest.TestCase):
     def test_basic(self):
         projects = ["P1", "P2"]
         profiles = {"linux_gcc7_64": linux_gcc7_64, "linux_gcc7_32": linux_gcc7_32}
-        """  tree = {"P1": ["FF", "CC", "DD", "EE"],
+        tree = {"P1": ["FF", "CC", "DD"],
                 "P2": ["FF"],
                 "CC": ["BB"],
                 "DD": ["BB"],
                 "BB": ["AA"],
                 "FF": ["AA"],
-                "AA": [],
-                "EE": []}"""
+                "AA": []}
 
-        tree = {"P1": ["AA"],
-                "P2": ["AA"]}
+        """tree = {"P1": ["AA"],
+                "P2": ["AA"]}"""
 
         tree = self._complete_refs(tree)
         projects = [self._complete_ref(p) for p in projects]

@@ -4,8 +4,10 @@ import re
 import shutil
 import tempfile
 
+import time
+
 from conan_ci.artifactory import Artifactory
-from conan_ci.tools import chdir, run_command
+from conan_ci.tools import chdir, run_command, run_command_output, load
 
 
 class BuildPackageJob(object):
@@ -33,8 +35,8 @@ class BuildPackageJob(object):
             run_command('conan remote remove conan-center')
         except Exception:
             pass
-        run_command('conan remote add upload_remote {}'.format(self.repo_read.url))
-        run_command('conan remote add central_remote {}'.format(self.repo_upload.url))
+        run_command('conan remote add upload_remote {}'.format(self.repo_upload.url))
+        run_command('conan remote add central_remote {}'.format(self.repo_read.url))
 
         # Download the lock file to the install folder
         self.repo_meta.download_node_lock(self.project_lock_remote_path, build_folder)
@@ -42,9 +44,21 @@ class BuildPackageJob(object):
         run_command('conan remove "*" -f')
 
         # Build the ref using the lockfile
-        run_command("conan install {} --install-folder {} "
-                    "--use-lock --build {}".format(self.ref, build_folder, self.ref))
-        # self.repo_meta.store_install_log(self.results_remote_path, output.decode())
+        print("\n\n****************** INSTALL OUTPUT {} ************************".format(self.ref))
+        try:
+            print("CONAN USER HOME: {}".format(os.getenv("CONAN_USER_HOME")))
+            output = run_command_output("conan install {} --install-folder {} "
+                                        "--use-lock --build {}".format(self.ref, build_folder,
+                                                                       self.ref))
+        except Exception as exc:
+            self.repo_meta.store_install_log(self.results_remote_path, str(exc))
+            self.repo_meta.store_failure(self.results_remote_path)
+            raise exc
+
+        print(output)
+        print("************************************************************\n\n")
+
+        self.repo_meta.store_install_log(self.results_remote_path, output)
 
         # Upload the packages
         run_command('conan upload {} --all -r upload_remote'.format(self.ref))
@@ -52,6 +66,7 @@ class BuildPackageJob(object):
         # Upload the modified lockfile to the right location
         self.repo_meta.store_node_lock(build_folder, self.results_remote_path)
         print("\n\n\n------------------------------------------------------")
+        self.repo_meta.store_success(self.results_remote_path)
 
 
 def get_pull_request_from_message(commit_message):
@@ -79,7 +94,6 @@ class MainJob(object):
     def run(self):
         try:
             self.ci_adapter.get_key("pr_number")
-            self.run_pr()
         except KeyError:
             message = self.ci_adapter.get_key("commit_message")
             pr_number = get_pull_request_from_message(message)
@@ -87,6 +101,8 @@ class MainJob(object):
                 self.run_merge(pr_number)
             else:
                 self.run_job()
+        else:
+            self.run_pr()
 
     def run_pr(self):
         job = PRJob(self.art, self.ci_adapter, self.ci_caller)
@@ -121,8 +137,8 @@ class PRJob(object):
         self.build_unique_id = "{}_PR{}_{}_{}".format(current_slug.replace("/", "_"), pr_number,
                                                       commit, build_number)
 
-        self.repo_upload = self.art.get_repo(dest_branch)
-        self.repo_read = self.art.create_repo(self.build_unique_id)
+        self.repo_read = self.art.get_repo(dest_branch)
+        self.repo_upload = self.art.create_repo(self.build_unique_id)
         self.checkout_folder = os.getcwd()
 
     def run(self):
@@ -131,8 +147,8 @@ class PRJob(object):
             run_command('conan remote remove conan-center')
         except Exception:
             pass
-        run_command('conan remote add upload_remote {}'.format(self.repo_read.url))
-        run_command('conan remote add central_remote {}'.format(self.repo_upload.url))
+        run_command('conan remote add upload_remote {}'.format(self.repo_upload.url))
+        run_command('conan remote add central_remote {}'.format(self.repo_read.url))
 
         profiles_names = self.repo_meta.get_profile_names()
         projects_refs = self.repo_meta.get_projects_refs()
@@ -154,52 +170,61 @@ class PRJob(object):
                 # Get the reference of the node being modified
                 name, version = self.inspect_name_and_version(self.checkout_folder)
                 ref = "{}/{}@conan/stable".format(name, version)
-                run_command("conan create {} {} "
+                run_command("conan export {} {} "
                             "--install-folder {} "
                             "--use-lock".format(self.checkout_folder, ref, install_folder))
-                run_command('conan upload {} --all -r upload_remote'.format(ref))
+                run_command('conan upload {} -r upload_remote'.format(ref))
 
-                # Get the build order for that lock
-                groups = self.get_build_order(install_folder)
+                def _call_build(the_node_id, the_ref):
+                    # Remote lock file path
+                    project_lock_path = self.repo_meta.project_lock_path(self.build_unique_id,
+                                                                         project_ref,
+                                                                         profile_name)
+                    the_ref = the_ref.split(":")[0].split("#")[0]
+                    remote_results_path = self.repo_meta.node_lock_path(self.build_unique_id,
+                                                                        project_ref,
+                                                                        profile_name, the_ref,
+                                                                        the_node_id)
+                    self.ci_caller.call_build(the_node_id, the_ref, project_lock_path,
+                                              remote_results_path, self.repo_read.name,
+                                              self.repo_upload.name)
 
-                # Update and clean main lock
-                self.update_lockfile(project_ref, profile_name, install_folder)
+                # Get the modified nodes corresponding to the node being modified
+                # (could be several?)
+                lock = json.loads(load(os.path.join(install_folder, "conan.lock")))["graph_lock"]
+                for node_id, data in lock["nodes"].items():
+                    if data.get("modified", False):
+                        ref = data["pref"].split(":")[0].split("#")[0]
+                        _call_build(node_id, ref)
 
-                # Remote lock file path
-                project_lock_path = self.repo_meta.project_lock_path(self.build_unique_id,
-                                                                     project_ref,
-                                                                     profile_name)
-                for group in groups:
-                    group_pids = []
-                    # Build the nodes
-                    for node_id, ref in group:
-                        print("Buildeo {}".format(ref))
-                        ref = ref.split(":")[0].split("#")[0]
-                        remote_results_path = self.repo_meta.node_lock_path(self.build_unique_id,
-                                                                            project_ref,
-                                                                            profile_name, ref,
-                                                                            node_id)
+                while not self.ci_caller.empty_queue():
+                    print("Sleeping 10 secs")
+                    time.sleep(10)
+                    ended = self.ci_caller.check_ended()
+                    for node_info in ended:
+                        # Check status
+                        status = self.repo_meta.get_status(node_info.lock_path)
+                        if not status:
+                            log = self.repo_meta.get_log(node_info.lock_path)
+                            raise Exception("The job '{}' failed with "
+                                            "error: {}".format(node_info.ref, log))
 
-                        pid = self.ci_caller.call_build(node_id, ref, project_lock_path,
-                                                        remote_results_path, self.repo_read.name,
-                                                        self.repo_upload.name)
-                        group_pids.append(pid)
-
-                    self.ci_caller.wait(group_pids)
-
-                    for node_id, ref in group:
                         # Get the generated lockfile
-                        ref = ref.split(":")[0].split("#")[0]
-                        remote_results_path = self.repo_meta.node_lock_path(self.build_unique_id,
-                                                                            project_ref,
-                                                                            profile_name, ref,
-                                                                            node_id)
                         tmp_path = tempfile.mkdtemp()
-                        self.repo_meta.download_node_lock(remote_results_path, tmp_path)
+                        self.repo_meta.download_node_lock(node_info.lock_path, tmp_path)
 
-                        # Update and clean main lock
-                        self.update_lockfile(project_ref, profile_name, tmp_path)
+                        # Update main lock with the node one
+                        new_lock_path = self.update_lockfile(project_ref, profile_name, tmp_path)
+
+                        # Get new build order to iterate the new available nodes
+                        groups = self.get_build_order(new_lock_path)
+                        if groups:
+                            first_group = groups[0]
+                            for new_node_id, new_ref in first_group:
+                                _call_build(new_node_id, new_ref)
+
                         shutil.rmtree(tmp_path)
+                        shutil.rmtree(new_lock_path)
 
     @staticmethod
     def inspect_name_and_version(folder):
@@ -217,7 +242,7 @@ class PRJob(object):
     def get_build_order(install_folder):
         with chdir(install_folder):
             json_path = os.path.join(install_folder, "bo.json")
-            run_command('conan graph build-order . --json {}'.format(json_path))
+            run_command('conan graph build-order {} --json {}'.format(install_folder, json_path))
             with open(json_path) as f:
                 data = json.load(f)
                 return data
@@ -242,4 +267,4 @@ class PRJob(object):
         remote_path = self.repo_meta.project_lock_path(self.build_unique_id, project_ref,
                                                        profile_name)
         self.repo_meta.store_node_lock(tmp_path, remote_path)
-
+        return tmp_path

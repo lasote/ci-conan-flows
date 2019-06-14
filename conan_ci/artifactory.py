@@ -77,6 +77,22 @@ class MetaRepo(ArtifactoryRepo):
     def store_install_log(self, remote_lock_path: str, log: str):
         self.deploy_contents(os.path.join(remote_lock_path, "install.log"), log)
 
+    def store_failure(self, remote_lock_path: str):
+        self.deploy_contents(os.path.join(remote_lock_path, "FAILED"), "")
+
+    def store_success(self, remote_lock_path: str):
+        self.deploy_contents(os.path.join(remote_lock_path, "OK"), "")
+
+    def get_status(self, remote_lock_path: str):
+        try:
+            self.read_file(os.path.join(remote_lock_path, "OK"))
+            return True
+        except Exception:
+            return False
+
+    def get_log(self, remote_lock_path):
+        return self.read_file(os.path.join(remote_lock_path, "install.log"))
+
     def download_node_lock(self, remote_lock_path: str, dest_folder):
         remote_path = os.path.join(remote_lock_path, "conan.lock")
         self.download_file(remote_path, dest_folder)
@@ -118,16 +134,3 @@ class Artifactory(object):
 
     def get_meta(self):
         return MetaRepo(self.url, MetaRepo.name, self.af)
-
-
-if __name__ == "__main__":
-    a = Artifactory("http://localhost:8090/artifactory", "admin", "password")
-    t = tempfile.mkdtemp()
-    f_path = os.path.join(t, "file.txt")
-    with open(f_path, "w") as f:
-        f.write("contents")
-    repo = a.get_repo("hey")
-    repo.deploy(f_path, "kk/de/la/vk/file.txt")
-    print(repo.list_files("kk/de/la/vk"))
-    repo.set_properties({"cosa": ["buena", "mane"], "mierda": ["fina"]})
-    print(repo.get_properties()["cosa"])

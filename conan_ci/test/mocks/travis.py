@@ -1,37 +1,36 @@
 import copy
+import multiprocessing
 import tempfile
-from multiprocessing import Process
-
 from typing import Dict, Callable
 
-from conan_ci.ci import MainJob, BuildPackageJob
-from conan_ci.ci_adapters import TravisCIAdapter
+from conan_ci.ci_adapters import NodeBuilding
 from conan_ci.test.mocks.git import GitRepo
 from conan_ci.tools import environment_append, chdir
 
 
-class TravisAPICallerMock(object):
-
-    def __init__(self, travis):
-        self.travis = travis
-
-    def call_build(self, repo_slug: str, branch: str, env: Dict[str, str]):
-        self.travis.run_build(repo_slug, branch, env)
-        return []
-
-    def wait(self, build_ids):
-        return
-
-
 class TravisAPICallerMultiThreadMock(object):
+    _run_processes: Dict[str, NodeBuilding]
+    _end_processes: Dict[str, NodeBuilding]
 
     def __init__(self, travis):
         self.travis = travis
         self._run_processes = {}
+        self._end_processes = {}
+
+    def _repeated_node_id(self, node_id):
+        for d in [self._run_processes, self._end_processes]:
+            for _, process_id in d.items():
+                if process_id.node_id == node_id:
+                    return True
+        return False
 
     def call_build(self, node_id: str, ref: str,
                    project_lock_path: str, remote_results_path: str,
                    read_remote_name: str, upload_remote_name: str):
+
+        if self._repeated_node_id(node_id):
+            print("Already launched: {}".format(node_id))
+            return
 
         env = {"CONAN_CI_NODE_ID": node_id,
                "CONAN_CI_REFERENCE": ref,
@@ -40,17 +39,24 @@ class TravisAPICallerMultiThreadMock(object):
                "CONAN_CI_PROJECT_LOCK_PATH": project_lock_path,
                "CONAN_CI_REMOTE_RESULTS_PATH": remote_results_path}
 
-        p = Process(target=self.travis.fire_build,
-                    args=("company/build_node", "master", "Launching Job", env))
+        args = ("company/build_node", "master", "Launching Job", env)
+        p = multiprocessing.Process(target=self.travis.fire_build, args=args)
         p.start()
-        self._run_processes[p.pid] = p
-        return p.pid
 
-    def wait(self, build_ids):
-        for pid, process in self._run_processes.items():
-            if pid in build_ids:
-                process.join()
-        return
+        self._run_processes[node_id] = NodeBuilding(node_id, ref, remote_results_path, p)
+
+    def check_ended(self):
+        node_infos = []
+        for node_id, node_info in self._run_processes.items():
+            if not node_info.element.is_alive():
+                self._end_processes[node_id] = node_info
+                node_infos.append(node_info)
+        for node_info in node_infos:
+            del self._run_processes[node_info.node_id]
+        return node_infos
+
+    def empty_queue(self):
+        return len(self._run_processes) == 0
 
 
 class TravisMock(object):
