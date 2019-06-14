@@ -52,6 +52,7 @@ def run_command(command):
 def run_command_output(command, cwd=None):
 
     try:
+        print(command)
         # piping both stdout, stderr and then later only reading one will hang the process
         # if the other fills the pip. So piping stdout, and redirecting stderr to stdout,
         # so both are merged and use just a single get_stream_lines() call

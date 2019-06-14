@@ -6,7 +6,7 @@ import uuid
 
 from conan_ci.artifactory import Artifactory
 from conan_ci.ci import MainJob, BuildPackageJob
-from conan_ci.ci_adapters import TravisCIAdapter
+from conan_ci.ci_adapters import TravisCIAdapter, TravisAPICaller
 from conan_ci.test.mocks.github import GithubMock
 from conan_ci.test.mocks.travis import TravisMock, TravisAPICallerMultiThreadMock
 from conan_ci.tools import environment_append, chdir, run_command
@@ -74,28 +74,8 @@ class TestBasic(unittest.TestCase):
         self.art = Artifactory(travis_env["ARTIFACTORY_URL"],
                                travis_env["ARTIFACTORY_USER"],
                                travis_env["ARTIFACTORY_PASSWORD"])
-        self.repo_develop = self.art.create_repo("develop")
         self.travis = TravisMock()
         self.github = GithubMock(self.travis)
-        try:
-            self.repo_meta = self.art.create_repo("meta")
-        except:
-            meta = self.art.get_repo("meta")
-            meta.remove()
-            self.repo_meta = self.art.create_repo("meta")
-
-    def tearDown(self):
-        self.repo_develop.remove()
-        repos = self.art.list_repos()
-        for r in repos:
-            if r.name.startswith("company_"):
-                r.remove()
-
-    def _store_meta(self, profiles, project_refs):
-        for name, contents in profiles.items():
-            self.repo_meta.deploy_contents("profiles/{}".format(name), contents)
-        p_json = {"projects": project_refs}
-        self.repo_meta.deploy_contents("projects.json", json.dumps(p_json))
 
     @staticmethod
     def _complete_ref(name):
@@ -137,7 +117,9 @@ class TestBasic(unittest.TestCase):
             :return:
             """
             ci_adapter = TravisCIAdapter()
-            ci_caller = TravisAPICallerMultiThreadMock(self.travis)
+            # ci_caller = TravisAPICallerMultiThreadMock(self.travis)
+            token = os.getenv("TRAVIS_TOKEN")
+            ci_caller = TravisAPICaller(self.travis, "lasote/build_node", token)
             main_job = MainJob(ci_adapter, ci_caller)
             with environment_append({"CONAN_USER_HOME": os.getcwd()}):
                 main_job.run()
@@ -183,7 +165,6 @@ class TestBasic(unittest.TestCase):
 
     def test_basic(self):
         projects = ["P1", "P2"]
-        profiles = {"linux_gcc7_64": linux_gcc7_64, "linux_gcc7_32": linux_gcc7_32}
         tree = {"P1": ["FF", "CC", "DD"],
                 "P2": ["FF"],
                 "CC": ["BB"],
@@ -198,10 +179,8 @@ class TestBasic(unittest.TestCase):
         tree = self._complete_refs(tree)
         projects = [self._complete_ref(p) for p in projects]
 
-        self._store_meta(profiles, projects)
-
         for p in projects:
-            self.create_gh_repo(tree, p, upload_recipe=True)
+            self.create_gh_repo(tree, p, upload_recipe=False)
 
         # Register a repo in travis that will be the one building single jobs
         self.register_build_repo()

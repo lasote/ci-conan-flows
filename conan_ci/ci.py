@@ -7,7 +7,16 @@ import tempfile
 import time
 
 from conan_ci.artifactory import Artifactory
-from conan_ci.tools import chdir, run_command, run_command_output, load
+from conan_ci.tools import chdir, run_command, run_command_output, load, environment_append
+
+
+def _add_remotes_and_login(upload_url, central_url):
+    run_command('conan remote add upload_remote {}'.format(upload_url))
+    run_command('conan remote add central_remote {}'.format(central_url))
+
+    # If the repo is private, we need to login or it will return 404 to everything
+    run_command('conan user -r upload_remote -p')
+    run_command('conan user -r central_remote -p')
 
 
 class BuildPackageJob(object):
@@ -28,45 +37,47 @@ class BuildPackageJob(object):
         self.ref = os.environ["CONAN_CI_REFERENCE"]
 
     def run(self):
-        print("\n\n\n------------------------------------------------------")
-        print("BUILDING '{}' AT '{}'".format(self.ref, os.getcwd()))
-        build_folder = os.getcwd()
-        try:
-            run_command('conan remote remove conan-center')
-        except Exception:
-            pass
-        run_command('conan remote add upload_remote {}'.format(self.repo_upload.url))
-        run_command('conan remote add central_remote {}'.format(self.repo_read.url))
+        # Home at the current dir
+        with environment_append({"CONAN_USER_HOME": os.getcwd()}):
+            print("\n\n\n------------------------------------------------------")
+            print("BUILDING '{}' AT '{}'".format(self.ref, os.getcwd()))
+            build_folder = os.getcwd()
+            try:
+                run_command('conan remote remove conan-center')
+            except Exception:
+                pass
 
-        # Download the lock file to the install folder
-        self.repo_meta.download_node_lock(self.project_lock_remote_path, build_folder)
-        run_command("conan graph clean-modified {}".format(build_folder))
-        run_command('conan remove "*" -f')
+            _add_remotes_and_login(self.repo_upload.url, self.repo_read.url)
 
-        # Build the ref using the lockfile
-        print("\n\n****************** INSTALL OUTPUT {} ************************".format(self.ref))
-        try:
-            print("CONAN USER HOME: {}".format(os.getenv("CONAN_USER_HOME")))
-            output = run_command_output("conan install {} --install-folder {} "
-                                        "--use-lock --build {}".format(self.ref, build_folder,
-                                                                       self.ref))
-        except Exception as exc:
-            self.repo_meta.store_install_log(self.results_remote_path, str(exc))
-            self.repo_meta.store_failure(self.results_remote_path)
-            raise exc
+            # Download the lock file to the install folder
+            self.repo_meta.download_node_lock(self.project_lock_remote_path, build_folder)
+            run_command("conan graph clean-modified {}".format(build_folder))
+            run_command('conan remove "*" -f')
 
-        print(output)
-        print("************************************************************\n\n")
+            # Build the ref using the lockfile
+            print("\n\n****************** INSTALL OUTPUT {} ************************".format(self.ref))
+            try:
+                print("CONAN USER HOME: {}".format(os.getenv("CONAN_USER_HOME")))
+                output = run_command_output("conan install {} --install-folder {} "
+                                            "--use-lock --build {}".format(self.ref, build_folder,
+                                                                           self.ref))
+            except Exception as exc:
+                self.repo_meta.store_install_log(self.results_remote_path, str(exc))
+                self.repo_meta.store_failure(self.results_remote_path)
+                raise exc
 
-        self.repo_meta.store_install_log(self.results_remote_path, output)
+            print(output)
+            print("************************************************************\n\n")
 
-        # Upload the packages
-        run_command('conan upload {} --all -r upload_remote'.format(self.ref))
+            self.repo_meta.store_install_log(self.results_remote_path, output)
 
-        # Upload the modified lockfile to the right location
-        self.repo_meta.store_node_lock(build_folder, self.results_remote_path)
-        print("\n\n\n------------------------------------------------------")
-        self.repo_meta.store_success(self.results_remote_path)
+            # Upload the packages
+            run_command('conan upload {} --all -r upload_remote'.format(self.ref))
+
+            # Upload the modified lockfile to the right location
+            self.repo_meta.store_node_lock(build_folder, self.results_remote_path)
+            print("\n\n\n------------------------------------------------------")
+            self.repo_meta.store_success(self.results_remote_path)
 
 
 def get_pull_request_from_message(commit_message):
@@ -92,17 +103,19 @@ class MainJob(object):
         self.art = Artifactory(art_url, art_user, art_password)
 
     def run(self):
-        try:
-            self.ci_adapter.get_key("pr_number")
-        except KeyError:
-            message = self.ci_adapter.get_key("commit_message")
-            pr_number = get_pull_request_from_message(message)
-            if pr_number:
-                self.run_merge(pr_number)
+        # Home at the current dir
+        with environment_append({"CONAN_USER_HOME": os.getcwd()}):
+            try:
+                self.ci_adapter.get_key("pr_number")
+            except KeyError:
+                message = self.ci_adapter.get_key("commit_message")
+                pr_number = get_pull_request_from_message(message)
+                if pr_number:
+                    self.run_merge(pr_number)
+                else:
+                    self.run_job()
             else:
-                self.run_job()
-        else:
-            self.run_pr()
+                self.run_pr()
 
     def run_pr(self):
         job = PRJob(self.art, self.ci_adapter, self.ci_caller)
@@ -147,8 +160,8 @@ class PRJob(object):
             run_command('conan remote remove conan-center')
         except Exception:
             pass
-        run_command('conan remote add upload_remote {}'.format(self.repo_upload.url))
-        run_command('conan remote add central_remote {}'.format(self.repo_read.url))
+
+        _add_remotes_and_login(self.repo_upload.url, self.repo_read.url)
 
         profiles_names = self.repo_meta.get_profile_names()
         projects_refs = self.repo_meta.get_projects_refs()

@@ -63,9 +63,6 @@ class TravisMock(object):
 
     # https://docs.travis-ci.com/user/environment-variables/#default-environment-variables
 
-    # REGISTRAR REPOS Y SCRIPTS (REPASAR FEATURE MARIA), TRAVIS HACE UN FIRE_PR y un FIRE_BUILD
-    # AL FIRE_BUILD RECIBIRA REPO Y RAMA SOLO
-
     repos: Dict[str, GitRepo]
     env_vars: Dict[str, Dict[str, str]]
     actions: Dict[str, Callable]
