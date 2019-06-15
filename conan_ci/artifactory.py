@@ -30,6 +30,8 @@ class ArtifactoryRepo(object):
             print(self.name)
             print(path)
             print(dir(error))
+            print(error.response)
+            print("\n\n".join(getattr(error, attr) for attr in dir(error)))
             raise
 
     def download_file(self, path, dest_folder):
