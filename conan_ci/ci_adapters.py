@@ -3,7 +3,7 @@ from collections import namedtuple
 from typing import Dict
 import requests
 
-NodeBuilding = namedtuple("NodeBuilding", "node_id ref lock_path element")
+NodeBuilding = namedtuple("NodeBuilding", "node_id ref lock_path element profile_name")
 
 
 class TravisCIAdapter(object):
@@ -37,7 +37,7 @@ class TravisAPICaller(object):
                     return True
         return False
 
-    def call_build(self, node_id: str, ref: str,
+    def call_build(self, node_id: str, profile_name: str, ref: str,
                    project_lock_path: str, remote_results_path: str,
                    read_remote_name: str, upload_remote_name: str):
 
@@ -52,15 +52,22 @@ class TravisAPICaller(object):
                "CONAN_CI_PROJECT_LOCK_PATH": project_lock_path,
                "CONAN_CI_REMOTE_RESULTS_PATH": remote_results_path}
 
+        slave = ""
+        if "linux" in profile_name:
+            slave = "linux"
+            # TODO: Pass the compiler version
+        if "windows" in profile_name:
+            slave = "windows"
+
         env_str = " ".join(["{}={}".format(k, v) for k, v in env.items()])
         data = {
              "request": {
-                 "message": "Build for {}".format(ref),
+                 "message": "{}: {}".format(ref, profile_name),
                  "branch": "master",
                  "merge_mode": "merge",
                  "config": {
                     "env": [env_str],
-                    "import": [{"source": "./linux.yml", "mode": "merge"}]
+                    "import": [{"source": "./{}.yml".format(slave), "mode": "merge"}]
                  }
                }
             }
@@ -70,7 +77,8 @@ class TravisAPICaller(object):
         if ret.ok:
             data_response = ret.json()
             request_id = data_response["request"]["id"]
-            self._run_processes[request_id] = NodeBuilding(node_id, ref, remote_results_path, request_id)
+            self._run_processes[request_id] = NodeBuilding(node_id, ref, remote_results_path,
+                                                           request_id, profile_name)
         else:
             raise Exception(ret)
 

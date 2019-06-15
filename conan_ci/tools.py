@@ -1,7 +1,10 @@
 import os
 import subprocess
+import tempfile
 from contextlib import contextmanager
 from subprocess import Popen, PIPE, STDOUT
+
+from pip._vendor.distlib._backport import shutil
 
 
 @contextmanager
@@ -40,6 +43,16 @@ def chdir(newdir):
         yield
     finally:
         os.chdir(old_path)
+
+
+@contextmanager
+def tmp_folder():
+    tmp_path = tempfile.mkdtemp()
+    try:
+        with chdir(tmp_path):
+            yield tmp_path
+    finally:
+        shutil.rmtree(tmp_path)
 
 
 def run_command(command):
