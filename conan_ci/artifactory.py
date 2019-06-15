@@ -116,8 +116,7 @@ class Artifactory(object):
 
     def __init__(self, artifactory_url: str, username: str, password: str):
         self.url = artifactory_url
-        settings = {"af_url": artifactory_url, "username": username, "password": password,
-                    "raw_response": True}
+        settings = {"af_url": artifactory_url, "username": username, "password": password}
         self.af = Rtpy(settings)
         self.af.system_and_configuration.system_health_ping()
 
