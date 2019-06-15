@@ -24,7 +24,13 @@ class ArtifactoryRepo(object):
         return [t["uri"][1:] for t in tmp["files"]]
 
     def read_file(self, path):
-        return self.af.artifacts_and_storage.retrieve_artifact(self.name, path).content
+        try:
+            return self.af.artifacts_and_storage.retrieve_artifact(self.name, path).content
+        except self.af.MalformedAfApiError as error:
+            print(self.name)
+            print(path)
+            print(dir(error))
+            raise
 
     def download_file(self, path, dest_folder):
         profile_contents = self.read_file(path)
