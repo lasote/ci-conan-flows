@@ -36,7 +36,7 @@ class ArtifactoryRepo(object):
 
     def download_file(self, path, dest_folder):
         profile_contents = self.read_file(path)
-        p_path = os.path.join(dest_folder, os.path.basename(path))
+        p_path = "/".join([dest_folder, os.path.basename(path)])
         with open(p_path, "wb") as f:
             f.write(profile_contents)
         return p_path
@@ -79,30 +79,30 @@ class MetaRepo(ArtifactoryRepo):
         return "{}/{}_{}".format(tmp, ref, node_id)
 
     def store_node_lock(self, local_lock_path: str, remote_lock_path: str):
-        self.deploy(os.path.join(local_lock_path, "conan.lock"),
-                    os.path.join(remote_lock_path, "conan.lock"))
+        self.deploy("/".join([local_lock_path, "conan.lock"]),
+                    "/".join([remote_lock_path, "conan.lock"]))
 
     def store_install_log(self, remote_lock_path: str, log: str):
-        self.deploy_contents(os.path.join(remote_lock_path, "install.log"), log)
+        self.deploy_contents("/".join([remote_lock_path, "install.log"]), log)
 
     def store_failure(self, remote_lock_path: str):
-        self.deploy_contents(os.path.join(remote_lock_path, "FAILED"), "")
+        self.deploy_contents("/".join([remote_lock_path, "FAILED"]), "")
 
     def store_success(self, remote_lock_path: str):
-        self.deploy_contents(os.path.join(remote_lock_path, "OK"), "")
+        self.deploy_contents("/".join([remote_lock_path, "OK"]), "")
 
     def get_status(self, remote_lock_path: str):
         try:
-            self.read_file(os.path.join(remote_lock_path, "OK"))
+            self.read_file("/".join([remote_lock_path, "OK"]))
             return True
         except Exception:
             return False
 
     def get_log(self, remote_lock_path):
-        return self.read_file(os.path.join(remote_lock_path, "install.log"))
+        return self.read_file("/".join([remote_lock_path, "install.log"]))
 
     def download_node_lock(self, remote_lock_path: str, dest_folder):
-        remote_path = os.path.join(remote_lock_path, "conan.lock")
+        remote_path = "/".join([remote_lock_path, "conan.lock"])
         self.download_file(remote_path, dest_folder)
 
     def get_profile_names(self):
