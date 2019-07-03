@@ -40,14 +40,14 @@ class MyConanfile(ConanFile):
 
 """
 
-linux_gcc7_64 = """
+linux_gcc_64 = """
 [settings]
 os=Linux
 os_build=Linux
 arch=x86_64
 arch_build=x86_64
 compiler=gcc
-compiler.version=7
+compiler.version=9
 compiler.libcxx=libstdc++11
 build_type=Release
 [options]
@@ -55,7 +55,7 @@ build_type=Release
 [env]
 """
 
-linux_gcc7_32 = linux_gcc7_64.replace("x86_64", "x86")
+linux_gcc_32 = linux_gcc_64.replace("x86_64", "x86")
 
 
 travis_env = {"CONAN_LOGIN_USERNAME": os.getenv("CONAN_LOGIN_USERNAME", "admin"),
@@ -183,7 +183,7 @@ class TestBasic(unittest.TestCase):
 
     def test_basic(self):
         projects = ["P1", "P2"]
-        profiles = {"linux_gcc7_64": linux_gcc7_64, "linux_gcc7_32": linux_gcc7_32}
+        profiles = {"linux_gcc_64": linux_gcc_64, "linux_gcc_32": linux_gcc_32}
         tree = {"P1": ["FF", "CC", "DD"],
                 "P2": ["FF"],
                 "CC": ["BB"],
@@ -192,8 +192,8 @@ class TestBasic(unittest.TestCase):
                 "FF": ["AA"],
                 "AA": []}
 
-        """tree = {"P1": ["AA"],
-                "P2": ["AA"]}"""
+        # projects = ["P1"]
+        # tree = {"P1": ["AA"], "AA": []}
 
         tree = self._complete_refs(tree)
         projects = [self._complete_ref(p) for p in projects]

@@ -37,12 +37,16 @@ def environment_append(env_vars):
 
 @contextmanager
 def chdir(newdir):
-    old_path = os.getcwd()
+    try:
+        old_path = os.getcwd()
+    except:
+        old_path = None
     os.chdir(newdir)
     try:
         yield
     finally:
-        os.chdir(old_path)
+        if old_path:
+            os.chdir(old_path)
 
 
 @contextmanager

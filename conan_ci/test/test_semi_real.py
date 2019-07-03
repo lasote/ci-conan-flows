@@ -1,4 +1,3 @@
-import json
 import os
 import tempfile
 import unittest
@@ -8,54 +7,9 @@ from conan_ci.artifactory import Artifactory
 from conan_ci.ci import MainJob, BuildPackageJob
 from conan_ci.ci_adapters import TravisCIAdapter, TravisAPICaller
 from conan_ci.test.mocks.github import GithubMock
-from conan_ci.test.mocks.travis import TravisMock, TravisAPICallerMultiThreadMock
+from conan_ci.test.mocks.travis import TravisMock
+from conan_ci.test.test_basic import conanfile
 from conan_ci.tools import environment_append, chdir, run_command
-
-conanfile = """
-import os
-from conans import ConanFile, tools
-
-class MyConanfile(ConanFile):
-    settings = "os", "arch", "build_type", "compiler"
-    name = "{}"
-    version = "{}"
-    exports_sources = "myfile.txt"
-    keep_imports = True
-    {}
-    
-    # comment {}
-                    
-    def imports(self):
-        self.copy("myfile.txt", folder=True)
-    def package(self):
-        self.copy("*myfile.txt")
-    def package_info(self):
-        self.output.info("SELF FILE: %s"
-            % tools.load(os.path.join(self.package_folder, "myfile.txt")))
-        for d in os.listdir(self.package_folder):
-            p = os.path.join(self.package_folder, d, "myfile.txt")
-            if os.path.isfile(p):
-                self.output.info("DEP FILE %s: %s" % (d, tools.load(p)))
-
-
-"""
-
-linux_gcc7_64 = """
-[settings]
-os=Linux
-os_build=Linux
-arch=x86_64
-arch_build=x86_64
-compiler=gcc
-compiler.version=7
-compiler.libcxx=libstdc++11
-build_type=Release
-[options]
-[build_requires]
-[env]
-"""
-
-linux_gcc7_32 = linux_gcc7_64.replace("x86_64", "x86")
 
 
 travis_env = {"CONAN_LOGIN_USERNAME": os.getenv("CONAN_LOGIN_USERNAME", "admin"),
@@ -74,6 +28,10 @@ class TestBasic(unittest.TestCase):
         self.art = Artifactory(travis_env["ARTIFACTORY_URL"],
                                travis_env["ARTIFACTORY_USER"],
                                travis_env["ARTIFACTORY_PASSWORD"])
+        try:
+            self.repo_develop = self.art.create_repo("develop")
+        except:
+            pass
         self.travis = TravisMock()
         self.github = GithubMock(self.travis)
 
@@ -173,8 +131,8 @@ class TestBasic(unittest.TestCase):
                 "FF": ["AA"],
                 "AA": []}
 
-        """tree = {"P1": ["AA"],
-                "P2": ["AA"]}"""
+        tree = {"P1": ["AA"],
+                "P2": ["AA"]}
 
         tree = self._complete_refs(tree)
         projects = [self._complete_ref(p) for p in projects]

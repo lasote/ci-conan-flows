@@ -24,7 +24,7 @@ class TravisAPICallerMultiThreadMock(object):
                     return True
         return False
 
-    def call_build(self, node_id: str, ref: str,
+    def call_build(self, node_id: str, profile_name: str, ref: str,
                    project_lock_path: str, remote_results_path: str,
                    read_remote_name: str, upload_remote_name: str):
 
@@ -43,7 +43,8 @@ class TravisAPICallerMultiThreadMock(object):
         p = multiprocessing.Process(target=self.travis.fire_build, args=args)
         p.start()
 
-        self._run_processes[node_id] = NodeBuilding(node_id, ref, remote_results_path, p)
+        self._run_processes[node_id] = NodeBuilding(node_id, ref, remote_results_path,
+                                                    p, profile_name)
 
     def check_ended(self):
         node_infos = []
@@ -115,7 +116,8 @@ class TravisMock(object):
         local_repo.clone(self.repos[slug].folder)
         local_repo.checkout(branch)
 
-        travis_env = {"TRAVIS_COMMIT_MESSAGE": commit_message,
+        travis_env = {"TRAVIS_BRANCH": branch,
+                      "TRAVIS_COMMIT_MESSAGE": commit_message,
                       "TRAVIS_BUILD_DIR": local_repo.folder,
                       "TRAVIS_COMMIT": local_repo.get_commit(),
                       "TRAVIS_REPO_SLUG": slug,

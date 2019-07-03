@@ -62,14 +62,17 @@ class ArtifactoryRepo(object):
     def remove(self):
         self.af.repositories.delete_repository(self.name)
 
+    def copy_all_to_repo(self, dest_repo_name):
+        self.af_store.copy_item(self.name, "/", dest_repo_name, "/")
+
 
 class MetaRepo(ArtifactoryRepo):
     name: str = "meta"
 
     @staticmethod
-    def project_lock_path(build_unique_id: str, ref: str, profile_name: str):
-        ref = ref.replace("/", "_").replace("@", "_")
-        return "tmp/{}/{}/{}".format(build_unique_id, ref, profile_name)
+    def project_lock_path(build_unique_id: str, project_ref: str, profile_name: str):
+        project_ref = project_ref.replace("/", "_").replace("@", "_")
+        return "tmp/{}/{}/{}".format(build_unique_id, project_ref, profile_name)
 
     @staticmethod
     def node_lock_path(build_unique_id: str, project_ref: str, profile_name: str,

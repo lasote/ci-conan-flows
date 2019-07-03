@@ -55,7 +55,6 @@ class TravisAPICaller(object):
         slave = ""
         if "linux" in profile_name:
             slave = "linux"
-            # TODO: Pass the compiler version
         if "windows" in profile_name:
             slave = "windows"
 
