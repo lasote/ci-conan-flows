@@ -1,9 +1,14 @@
+import json
 import os
-from collections import namedtuple
 from typing import Dict
+
 import requests
 
-NodeBuilding = namedtuple("NodeBuilding", "node_id ref lock_path element profile_name")
+from conan_ci.model.build import Build
+from conan_ci.model.build_configuration import BuildConfiguration
+from conan_ci.model.build_create_info import BuildCreateInfo
+from conan_ci.model.node_info import NodeInfo
+from conan_ci.model.repos_build import ReposBuild
 
 
 class TravisCIAdapter(object):
@@ -20,8 +25,8 @@ class TravisCIAdapter(object):
 
 
 class TravisAPICaller(object):
-    _run_processes: Dict[str, NodeBuilding]
-    _end_processes: Dict[str, NodeBuilding]
+    _run_processes: Dict[str, BuildCreateInfo]
+    _end_processes: Dict[str, BuildCreateInfo]
 
     def __init__(self, travis, repo_slug, travis_token):
         self.travis = travis
@@ -32,36 +37,30 @@ class TravisAPICaller(object):
 
     def _repeated_node_id(self, node_id):
         for d in [self._run_processes, self._end_processes]:
-            for _, process_id in d.items():
-                if process_id.node_id == node_id:
+            for _, create_info in d.items():
+                if create_info.node_info.id == node_id:
                     return True
         return False
 
-    def call_build(self, node_id: str, profile_name: str, ref: str,
-                   project_lock_path: str, remote_results_path: str,
-                   read_remote_name: str, upload_remote_name: str):
+    def call_build(self, create_info: BuildCreateInfo):
 
-        if self._repeated_node_id(node_id):
-            print("Already launched: {}".format(node_id))
+        if self._repeated_node_id(create_info.node_info.id):
+            print("Already launched: {}".format(create_info.node_info.id))
             return
 
-        env = {"CONAN_CI_NODE_ID": node_id,
-               "CONAN_CI_REFERENCE": ref,
-               "CONAN_CI_READ_REMOTE_NAME": read_remote_name,
-               "CONAN_CI_UPLOAD_REMOTE_NAME": upload_remote_name,
-               "CONAN_CI_PROJECT_LOCK_PATH": project_lock_path,
-               "CONAN_CI_REMOTE_RESULTS_PATH": remote_results_path}
+        env = {"CONAN_CI_BUILD_JSON": json.dumps(create_info.dumps())}
 
         slave = ""
-        if "linux" in profile_name:
+        if "linux" in create_info.build_conf.profile_name:
             slave = "linux"
-        if "windows" in profile_name:
+        if "windows" in create_info.build_conf.profile_name:
             slave = "windows"
 
         env_str = " ".join(["{}={}".format(k, v) for k, v in env.items()])
         data = {
              "request": {
-                 "message": "{}: {}".format(ref, profile_name),
+                 "message": "{}: {}".format(create_info.node_info.ref,
+                                            create_info.build_conf.profile_name),
                  "branch": "master",
                  "merge_mode": "merge",
                  "config": {
@@ -76,8 +75,7 @@ class TravisAPICaller(object):
         if ret.ok:
             data_response = ret.json()
             request_id = data_response["request"]["id"]
-            self._run_processes[request_id] = NodeBuilding(node_id, ref, remote_results_path,
-                                                           request_id, profile_name)
+            self._run_processes[request_id] = create_info
         else:
             raise Exception(ret)
 

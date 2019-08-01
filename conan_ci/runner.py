@@ -1,21 +1,50 @@
 import os
 import uuid
 from contextlib import contextmanager
+from subprocess import PIPE, STDOUT, Popen
 
-from conan_ci.tools import run_command_output
+
+def run_command_output(command, cwd=None):
+
+    try:
+        proc = Popen(command, shell=True, stdout=PIPE, stderr=STDOUT, cwd=cwd)
+    except Exception as e:
+        raise Exception("Error while executing '%s'\n\t%s" % (command, str(e)))
+
+    def get_stream_lines(the_stream):
+        ret = []
+        while True:
+            line = the_stream.readline()
+            if not line:
+                break
+            ret.append(line.decode())
+        return "".join(ret)
+
+    output = get_stream_lines(proc.stdout)
+
+    proc.communicate()
+    ret = proc.returncode
+    if ret != 0:
+        raise Exception(output)
+    return output
 
 
-def run(command, capture_output=False) -> str:
+def run(command, capture_output=True, ignore_failure=False):
     output = ""
+    print(">>>>>>>> {}".format(command))
     if not capture_output:
         ret = os.system(command)
         if ret != 0:
-            raise Exception()
+            if not ignore_failure:
+                raise Exception()
+            return ret
     else:
         try:
             output = run_command_output(command)
         except Exception as exc:
-            raise Exception("Error: {}.\n Output: {}".format(exc, output))
+            if not ignore_failure:
+                raise Exception("Error: {}.\n Output: {}".format(exc, output)) from None
+            return output
     return output
 
 
@@ -50,9 +79,9 @@ class DockerCommandRunner(object):
         run("docker stop {}".format(self._container_id))
         run("docker rm {}".format(self._container_id))
 
-    def run(self, command, capture_output=False):
-        mixed = 'docker container exec {} sh -c "{}"'.format(self._container_id, command)
-        print(mixed)
+    def run(self, command, capture_output=True):
+        mixed = 'docker container exec {} sh -c "{}"'.format(self._container_id,
+                                                             command.replace("\"", "\\\""))
         output = run(mixed, capture_output)
         return output
 

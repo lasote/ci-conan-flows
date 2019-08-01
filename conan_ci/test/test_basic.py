@@ -1,15 +1,7 @@
-import json
-import os
-import tempfile
-import unittest
 import uuid
+import shutil
 
-from conan_ci.artifactory import Artifactory
-from conan_ci.ci import MainJob, BuildPackageJob
-from conan_ci.ci_adapters import TravisCIAdapter
-from conan_ci.test.mocks.github import GithubMock
-from conan_ci.test.mocks.travis import TravisMock, TravisAPICallerMultiThreadMock
-from conan_ci.tools import environment_append, chdir, run_command
+from conan_ci.test.base_test_class import BaseTest
 
 conanfile = """
 import os
@@ -29,6 +21,14 @@ class MyConanfile(ConanFile):
         self.copy("myfile.txt", folder=True)
     def package(self):
         self.copy("*myfile.txt")
+    
+    def build(self):
+        self.output.info("Building %s" % self.name)
+        for d in os.listdir(self.build_folder):
+            p = os.path.join(self.build_folder, d, "myfile.txt")
+            if os.path.isfile(p):
+                self.output.info("While building: DEP FILE %s: %s" % (d, tools.load(p)))
+    
     def package_info(self):
         self.output.info("SELF FILE: %s"
             % tools.load(os.path.join(self.package_folder, "myfile.txt")))
@@ -47,153 +47,130 @@ os_build=Linux
 arch=x86_64
 arch_build=x86_64
 compiler=gcc
-compiler.version=9
-compiler.libcxx=libstdc++11
+compiler.version=7
+compiler.libcxx=libstdc++
 build_type=Release
 [options]
 [build_requires]
 [env]
 """
 
+
+def get_conanfile(ref, reqs):
+    name, version = ref.split("@")[0].split("/")
+    rand = uuid.uuid4()
+    reqs_str = ",".join('"{}"'.format(r) for r in reqs)
+    reqs_line = 'requires = {}'.format(reqs_str) if reqs else ""
+    cf = conanfile.format(name, version, reqs_line, rand)
+    return cf
+
+
 linux_gcc_32 = linux_gcc_64.replace("x86_64", "x86")
 
 
-travis_env = {"CONAN_LOGIN_USERNAME": os.getenv("CONAN_LOGIN_USERNAME", "admin"),
-              "CONAN_PASSWORD": os.getenv("CONAN_PASSWORD", "password"),
-              "ARTIFACTORY_URL": os.getenv("ARTIFACTORY_URL", "http://localhost:8090/artifactory"),
-              "ARTIFACTORY_USER":  os.getenv("ARTIFACTORY_USER", "admin"),
-              "ARTIFACTORY_PASSWORD": os.getenv("ARTIFACTORY_PASSWORD", "password"),
-              "CONAN_REVISIONS_ENABLED": os.getenv("CONAN_REVISIONS_ENABLED", "1")}
-
-travis_token = os.getenv("TRAVIS_TOKEN", "")
+meta_repo_name = "meta"
+pre_develop_repo_name = "pre-dev"
+develop_repo_name = "dev"
 
 
-class TestBasic(unittest.TestCase):
+class TestBasic(BaseTest):
 
     def setUp(self):
-        self.art = Artifactory(travis_env["ARTIFACTORY_URL"],
-                               travis_env["ARTIFACTORY_USER"],
-                               travis_env["ARTIFACTORY_PASSWORD"])
-        self.repo_develop = self.art.create_repo("develop")
-        self.travis = TravisMock()
-        self.github = GithubMock(self.travis)
-        try:
-            self.repo_meta = self.art.create_repo("meta")
-        except:
-            meta = self.art.get_repo("meta")
-            meta.remove()
-            self.repo_meta = self.art.create_repo("meta")
+        super(TestBasic, self).init(pre_develop_repo_name, develop_repo_name, meta_repo_name,
+                                    slug_prefix="company")
 
-    def tearDown(self):
-        self.repo_develop.remove()
-        repos = self.art.list_repos()
-        for r in repos:
-            if r.name.startswith("company_"):
-                r.remove()
+    def _prepare_tree(self, tree):
+        for ref, deps in tree.items():
+            files = {"conanfile.py": get_conanfile(ref, deps),
+                     "myfile.txt": "Base {} contents".format(ref)}
+            folder = self.create_gh_repo(self._slug(ref), files=files)
+            # Upload only the recipes to the repository
+            commands = ["conan remote add develop {}".format(self.repo_develop.url),
+                        "conan export . {}".format(ref),
+                        "conan upload {} -r develop -c --all".format(ref)]
+            tmp, _ = self.run_conan_commands(commands, package_id_mode="package_revision_mode",
+                                             folder=folder)
+            shutil.rmtree(tmp)
 
-    def _store_meta(self, profiles, project_refs):
-        for name, contents in profiles.items():
-            self.repo_meta.deploy_contents("profiles/{}".format(name), contents)
-        p_json = {"projects": project_refs}
-        self.repo_meta.deploy_contents("projects.json", json.dumps(p_json))
+    def test_quick(self):
+        projects = ["P1/1.0@conan/stable"]
+        profiles = {"linux_gcc_64": linux_gcc_64}
+        self.populate_meta_repo(profiles, projects)
 
-    @staticmethod
-    def _complete_ref(name):
-        if "/" not in name:
-            return "{}/1.0@conan/stable".format(name)
-        return name
+        tree = {"P1/1.0@conan/stable": ["AA/1.0@conan/stable"],
+                "AA/1.0@conan/stable": []}
+        self._prepare_tree(tree)
 
-    def _complete_refs(self, tree):
-        new_tree = {}
-        for ref, reqs in tree.items():
-            new_tree[self._complete_ref(ref)] = [self._complete_ref(r) for r in reqs]
-        return new_tree
+        # Create a branch on AA an open pull request
+        repo_a = self.github.repos["company/AA"]
+        repo_a.checkout_copy("feature/a_improved")
+        message_commit = "Here we go!"
+        repo_a.commit_files({"myfile.txt": "Modified myfile: I'm modified AA"}, message_commit)
 
-    def get_slug(self, name):
-        slug = "company/{}".format(name)
-        return slug
+        # We don't use forks because the env vars wouldn't be available
+        pr_a = self.github.open_pull_request("company/AA", "develop",
+                                             "company/AA", "feature/a_improved")
 
-    def create_gh_repo(self, tree, ref, upload_recipe=True):
-        name, version = ref.split("@")[0].split("/")
-        slug = self.get_slug(name)
-        if self.github.repos.get(slug):
-            return
-        rand = uuid.uuid4()
-        reqs = tree.get(ref, [])
-        reqs_str = ",".join('"{}"'.format(r) for r in reqs)
-        reqs_line = 'requires = {}'.format(reqs_str) if reqs else ""
-        cf = conanfile.format(name, version, reqs_line, rand)
-        files = {"conanfile.py": cf, "myfile.txt": "Original content: {}".format(ref)}
+        self.github.merge_pull_request("company/AA", pr_a)
 
-        # Register the repo on Github
-        repo = self.github.create_repository(slug, files)
 
-        # Register the repo on travis
-        self.travis.register_env_vars(slug, travis_env)
+        input("stop")
 
-        def main_action():
-            """
-            This simulates the yml script of a repository of a library
-            :return:
-            """
-            ci_adapter = TravisCIAdapter()
-            ci_caller = TravisAPICallerMultiThreadMock(self.travis)
-            main_job = MainJob(ci_adapter, ci_caller)
-            with environment_append({"CONAN_USER_HOME": os.getcwd()}):
-                main_job.run()
+    def test_merge_flow_basic(self):
+        projects = ["P1/1.0@conan/stable"]
+        profiles = {"linux_gcc_64": linux_gcc_64}
+        self.populate_meta_repo(profiles, projects)
 
-        self.travis.register_repo(slug, repo, main_action)
+        tree = {"P1/1.0@conan/stable": ["BB/1.0@conan/stable", "CC/1.0@conan/stable"],
+                "BB/1.0@conan/stable": ["AA/1.0@conan/stable"],
+                "CC/1.0@conan/stable": ["AA/1.0@conan/stable"],
+                "AA/1.0@conan/stable": []}
 
-        tmp = tempfile.mkdtemp()
-        for name, contents in files.items():
-            path = os.path.join(tmp, name)
-            with open(path, "w") as f:
-                f.write(contents)
+        self._prepare_tree(tree)
 
-        if upload_recipe:
-            with environment_append({"CONAN_USER_HOME": tmp,
-                                     "CONAN_REVISIONS_ENABLED": "1",
-                                     "CONAN_LOGIN_USERNAME": travis_env["CONAN_LOGIN_USERNAME"],
-                                     "CONAN_PASSWORD": travis_env["CONAN_PASSWORD"],
-                                     "CONAN_NON_INTERACTIVE": "1"}):
-                with chdir(tmp):
-                    run_command("conan remote add develop {}".format(self.repo_develop.url))
-                    run_command("conan export . {}".format(ref))
-                    run_command("conan upload {} -r develop -c --all".format(ref))
+        # Create a branch on AA an open pull request
+        repo_a = self.github.repos["company/AA"]
+        repo_a.checkout_copy("feature/a_improved")
+        message_commit = "Here we go!"
+        repo_a.commit_files({"myfile.txt": "Modified myfile: I'm modified AA"}, message_commit)
 
-        for req in reqs:
-            self.create_gh_repo(tree, req, upload_recipe=upload_recipe)
+        # We don't use forks because the env vars wouldn't be available
+        pr_a = self.github.open_pull_request("company/AA", "develop",
+                                             "company/AA", "feature/a_improved")
 
-    def register_build_repo(self):
-        slug = "company/build_node"
-        repo = self.github.create_repository(slug, {"foo": "bar"})
-        repo.checkout_copy("master")  # By default the mock creates develop
+        # Create a branch on CC an open pull request
+        repo_c = self.github.repos["company/CC"]
+        repo_c.checkout_copy("feature/c_improved")
+        message_commit = "Here we go with CC!"
+        repo_c.commit_files({"myfile.txt": "Modified myfile: I'm modified CC"}, message_commit)
 
-        def action():
-            """
-            This simulates the yml script of a repository of a library
-            :return:
-            """
-            main_job = BuildPackageJob()
-            with environment_append({"CONAN_USER_HOME": os.getcwd()}):
-                main_job.run()
+        # We don't use forks because the env vars wouldn't be available
+        pr_c = self.github.open_pull_request("company/CC", "develop",
+                                             "company/CC", "feature/c_improved")
 
-        self.travis.register_env_vars(slug, travis_env)
-        self.travis.register_repo(slug, repo, action)
+        # We merge PR_A and then we merge PR_B
+        self.github.merge_pull_request("company/CC", pr_c)
+        self.github.merge_pull_request("company/AA", pr_a)
 
-    def test_basic(self):
-        projects = ["P1", "P2"]
-        profiles = {"linux_gcc_64": linux_gcc_64, "linux_gcc_32": linux_gcc_32}
-        tree = {"P1": ["FF", "CC", "DD"],
-                "P2": ["FF"],
-                "CC": ["BB"],
-                "DD": ["BB"],
+        # Asserts
+        commands = ["conan remote add develop {}".format(self.repo_develop.url),
+                    "conan install P1/1.0@conan/stable"]
+        _, output = self.run_conan_commands(commands, package_id_mode="package_revision_mode")
+        expected = """SELF FILE: Base P1/1.0@conan/stable contents
+P1/1.0@conan/stable: DEP FILE AA: Base AA/1.0@conan/stable contents
+P1/1.0@conan/stable: DEP FILE CC: Modified myfile: I'm modified CC
+P1/1.0@conan/stable: DEP FILE BB: Base BB/1.0@conan/stable contents
+"""
+        self.assertIn(expected, output)
+
+
+""" 
+    def test_merge_flow_conflict(self):
+        projects = ["P1"]
+        profiles = {"linux_gcc_64": linux_gcc_64}
+        tree = {"P1": ["BB", "CC"],
                 "BB": ["AA"],
-                "FF": ["AA"],
-                "AA": []}
-
-        # projects = ["P1"]
-        # tree = {"P1": ["AA"], "AA": []}
+                "CC": ["AA"]}
 
         tree = self._complete_refs(tree)
         projects = [self._complete_ref(p) for p in projects]
@@ -207,25 +184,46 @@ class TestBasic(unittest.TestCase):
         self.register_build_repo()
 
         # Create a branch on AA an open pull request
-        repo = self.github.repos[self.get_slug("AA")]
-        repo.checkout_copy("feature/cool1")
+        repo_a = self.github.repos[self.get_slug("AA")]
+        repo_a.checkout_copy("feature/a_improved")
         message_commit = "Here we go!"
-        repo.commit_files({"myfile.txt": "Modified myfile: pepe"}, message_commit)
-
-        # Generate binary for EE merging the PR
-        # pr_number = self.github.open_pull_request("lasote/EE", "company/EE")
-        # self.github.merge_pull_request(pr_number)
+        repo_a.commit_files({"myfile.txt": "Modified myfile: I'm modified AA"}, message_commit)
 
         # We don't use forks because the env vars wouldn't be available
-        pr_number = self.github.open_pull_request("company/AA", "develop",
-                                                  "company/AA", "feature/cool1")
+        pr_a = self.github.open_pull_request("company/AA", "develop",
+                                             "company/AA", "feature/a_improved")
 
-        self.github.merge_pull_request(pr_number)
+        # Create another branch on AA an open pull request
+        repo_a = self.github.repos[self.get_slug("AA")]
+        repo_a.checkout_copy("feature/a_super_improved")
+        message_commit = "Here we go! Super Improving!"
+        repo_a.commit_files({"myfile.txt": "Modified myfile: I'm modified AA. Super improved!"
+                                           "And super modified."}, message_commit)
+
+        # We don't use forks because the env vars wouldn't be available
+        pr_a_super = self.github.open_pull_request("company/AA", "develop",
+                                                   "company/AA", "feature/a_super_improved")
+
+        # Create a branch on CC an open pull request
+        repo_c = self.github.repos[self.get_slug("CC")]
+        repo_c.checkout_copy("feature/c_improved")
+        message_commit = "Here we go with CC!"
+        repo_c.commit_files({"myfile.txt": "Modified myfile: I'm modified CC"}, message_commit)
+
+        # We don't use forks because the env vars wouldn't be available
+        pr_c = self.github.open_pull_request("company/CC", "develop",
+                                             "company/CC", "feature/c_improved")
+
+        # We merge PR_A and then we merge PR_B
+        # FIXME: Wait for the PRs to be built
+
+        self.github.wait_for_pr(pr_a)
+        self.github.wait_for_pr(pr_a_super)
+        self.github.wait_for_pr(pr_c)
+
+        self.github.merge_pull_request("company/CC", pr_c)
+        self.github.merge_pull_request("company/AA", pr_a)
+        self.github.merge_pull_request("company/AA", pr_a_super)
         # TODO: asserts
         print("Breakpoint")
-
-
-
-
-
-
+"""

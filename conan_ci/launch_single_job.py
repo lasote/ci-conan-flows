@@ -1,3 +1,3 @@
-from conan_ci.ci import BuildPackageJob
+from conan_ci.jobs.create_job import ConanCreateJob
 
-BuildPackageJob().run()
+ConanCreateJob().run()

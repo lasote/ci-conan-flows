@@ -1,0 +1,189 @@
+
+<!doctype html>
+<html>
+<head>
+  <title>Conan CI FLOWS</title>
+
+  <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+  <script type="text/javascript" src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
+
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css" rel="stylesheet" type="text/css" />
+
+
+  <style type="text/css">
+    .graph_square {
+      width: 600px;
+      height: 400px;
+      border: 1px solid lightgray;
+    }
+
+    p {
+      max-width:700px;
+    }
+  </style>
+</head>
+<body>
+
+<input name="json_url" id="json_url">
+
+<div id="graphs">
+</div>
+
+
+<script type="text/javascript">
+  var networks = {};
+  var lastElementIndex = -1;
+
+  setInterval(function(){ refreshData(); }, 3000);
+
+  function refreshData(){
+     var url = $("#json_url").val();
+     if(!url){
+        console.log("No URL");
+        return;
+     }
+     $.getJSON(url, function( data ) {
+        var data = data["elements"];
+        for(var i=lastElementIndex + 1; i<data.length; i++){
+            processAction(data[i]);
+            lastElementIndex = i;
+        }
+     });
+  }
+
+  function processAction(action){
+     var actionType = action["action"];
+     if(actionType == "push_graph"){
+        renderGraph(action["data"]["name"], action["data"]["graph"]);
+     }
+     else if(actionType == "node_building"){
+        nodeBuildingAction(action["data"]["node"], action["data"]["pref"]);
+     }
+     else if(actionType == "node_stopped_building"){
+        nodeStoppedBuildingAction(action["data"]["node"],  action["data"]["pref"]);
+     }
+
+  }
+
+  function findNetwork(nodeID){
+     for(var name in networks){
+        var network = networks[name];
+        if(nodeID in network.body.data["nodes"]["_data"]){
+          return network;
+        }
+     }
+     return null;
+  }
+
+
+  function nodeBuildingAction(nodeID, ref){
+       var network = findNetwork(nodeID);
+       if(network){
+         var d = network.body.data;
+         d["nodes"]["_data"][nodeID].color = {background: "#0099FF", border:'black'};
+         d["nodes"]["_data"][nodeID].label = `Building: ${d["nodes"]["_data"][nodeID].label}`;
+         d["nodes"]["_data"][nodeID]["pref"] = ref
+         network.setData(d);
+       }
+  }
+
+  function nodeStoppedBuildingAction(nodeID, new_pref){
+       var network = findNetwork(nodeID);
+       if(network){
+         var d = network.body.data;
+         d["nodes"]["_data"][nodeID].color = {background: "#faffb5", border:'black'} ;
+         d["nodes"]["_data"][nodeID].label = d["nodes"]["_data"][nodeID].label.replace("Building: ", "");
+         d["nodes"]["_data"][nodeID]["pref"] = new_pref
+         network.setData(d);
+       }
+  }
+
+
+
+
+  function getGraphData(name, graph){
+      var nodes = [];
+      var edges = [];
+      var nodes_data = graph["graph_lock"]["nodes"];
+      for (var key in nodes_data) {
+         var value = nodes_data[key];
+         var pref = value["pref"];
+         var node = {"id": key,
+                     "color": {background:'white', border:'grey'},
+                     "label": pref.split("@")[0],
+                     "pref": pref
+         };
+         nodes.push(node);
+         if(value["requires"]){
+            for (var pref in value["requires"]){
+               var req_id = value["requires"][pref];
+               var edge =  {from: key, to: req_id, arrows:'to'}
+               edges.push(edge);
+            }
+         }
+      }
+      var jNodes = new vis.DataSet(nodes);
+      var jEdges = new vis.DataSet(edges);
+
+      var data = {
+        nodes: nodes,
+        edges: edges
+      };
+
+      return data;
+  }
+
+  function renderGraph(name, graph){
+      var data = getGraphData(name, graph);
+      var nice_name = name;
+      if(name.includes("PR")){
+          nice_name = "Pull Request to: ";
+          var tmp = name.split("_");
+          nice_name += `"${tmp[0]}/${tmp[1]}" repository`;
+      }
+      $("#graphs").append(`<div class="graph_block"><h2>${nice_name}</h2><div id="graph_${name}" class="graph_square"></div>`);
+      var container = document.getElementById(`graph_${name}`);
+      var options = {
+        nodes: {borderWidth: 2},
+        interaction: {hover: true},
+        layout: {
+            hierarchical: {
+               sortMethod: "directed",
+               direction: 'DU'
+            }
+        }
+      }
+      var network = new vis.Network(container, data, options);
+      network.on("click", function (params) {
+        var nodeID = params.nodes[0];
+        var node_data = this.body.data["nodes"]["_data"][nodeID];
+        if(node_data && node_data["pref"]){
+          // console.log(node_data["pref"]);
+          var tmp = node_data["pref"].split(":");
+          var pref_prev = tmp[1];
+          var ref_rrev = tmp[0];
+          if(pref_prev){
+            var package_id = pref_prev.split("#")[0];
+            var prev = pref_prev.split("#")[1];
+
+            var ref = ref_rrev.split("#")[0];
+            var rrev = ref_rrev.split("#")[1];
+            var info = `REF: ${ref}\nPID: ${package_id}\nRREV: ${rrev}\nPREV: ${prev}\n`
+            console.log(info);
+          }
+          else{
+            var info = `REF: ${ref}\n\nRREV: ${rrev}\n`
+            console.log(info);
+          }
+        }
+      });
+
+      networks[name] = network;
+
+  }
+
+</script>
+
+
+</body>
+</html>

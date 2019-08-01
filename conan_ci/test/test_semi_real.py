@@ -4,12 +4,14 @@ import unittest
 import uuid
 
 from conan_ci.artifactory import Artifactory
-from conan_ci.ci import MainJob, BuildPackageJob
+from conan_ci.jobs.coordinator_job import CoordinatorJob
 from conan_ci.ci_adapters import TravisCIAdapter, TravisAPICaller
+from conan_ci.jobs.create_job import ConanCreateJob
+from conan_ci.runner import run
 from conan_ci.test.mocks.github import GithubMock
 from conan_ci.test.mocks.travis import TravisMock
 from conan_ci.test.test_basic import conanfile
-from conan_ci.tools import environment_append, chdir, run_command
+from conan_ci.tools import environment_append, chdir
 
 
 travis_env = {"CONAN_LOGIN_USERNAME": os.getenv("CONAN_LOGIN_USERNAME", "admin"),
@@ -78,7 +80,7 @@ class TestBasic(unittest.TestCase):
             # ci_caller = TravisAPICallerMultiThreadMock(self.travis)
             token = os.getenv("TRAVIS_TOKEN")
             ci_caller = TravisAPICaller(self.travis, "lasote/build_node", token)
-            main_job = MainJob(ci_adapter, ci_caller)
+            main_job = CoordinatorJob(ci_adapter, ci_caller)
             with environment_append({"CONAN_USER_HOME": os.getcwd()}):
                 main_job.run()
 
@@ -97,14 +99,14 @@ class TestBasic(unittest.TestCase):
                                      "CONAN_PASSWORD": travis_env["CONAN_PASSWORD"],
                                      "CONAN_NON_INTERACTIVE": "1"}):
                 with chdir(tmp):
-                    run_command("conan remote add develop {}".format(self.repo_develop.url))
-                    run_command("conan export . {}".format(ref))
-                    run_command("conan upload {} -r develop -c --all".format(ref))
+                    run("conan remote add develop {}".format(self.repo_develop.url))
+                    run("conan export . {}".format(ref))
+                    run("conan upload {} -r develop -c --all".format(ref))
 
         for req in reqs:
             self.create_gh_repo(tree, req, upload_recipe=upload_recipe)
 
-    def register_build_repo(self):
+    def register_create_repo(self):
         slug = "company/build_node"
         repo = self.github.create_repository(slug, {"foo": "bar"})
         repo.checkout_copy("master")  # By default the mock creates develop
@@ -114,7 +116,7 @@ class TestBasic(unittest.TestCase):
             This simulates the yml script of a repository of a library
             :return:
             """
-            main_job = BuildPackageJob()
+            main_job = ConanCreateJob()
             with environment_append({"CONAN_USER_HOME": os.getcwd()}):
                 main_job.run()
 
@@ -141,7 +143,7 @@ class TestBasic(unittest.TestCase):
             self.create_gh_repo(tree, p, upload_recipe=False)
 
         # Register a repo in travis that will be the one building single jobs
-        self.register_build_repo()
+        self.register_create_repo()
 
         # Create a branch on AA an open pull request
         repo = self.github.repos[self.get_slug("AA")]

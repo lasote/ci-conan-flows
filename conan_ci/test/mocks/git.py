@@ -36,6 +36,9 @@ class GitRepo(object):
     def add_remote(self, name: str, url: str):
         self.run("git remote add {} {}".format(name, url))
 
+    def remote_remove(self, name: str):
+        self.run("git remote remove {}".format(name))
+
     def fetch(self, name: str):
         self.run("git fetch {}".format(name))
 
@@ -57,7 +60,11 @@ class GitRepo(object):
         self.run("git commit -m \"{}\"".format(message))
 
     def merge(self, dest_branch: str, remote_url: str, remote_branch: str, merge_message=""):
-        self.run("git remote add tmp {}".format(remote_url))
+        try:
+            # Might already have it from a previous pr
+            self.run("git remote add tmp {}".format(remote_url))
+        except:
+            pass
         self.run("git fetch tmp")
         self.run("git checkout {}".format(dest_branch))
         if merge_message:

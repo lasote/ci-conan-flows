@@ -1,4 +1,8 @@
+import multiprocessing
+from asyncio import sleep
+from multiprocessing import Process
 from typing import Dict
+from collections import defaultdict
 from conan_ci.test.mocks.git import GitRepo
 from conan_ci.test.mocks.travis import TravisMock
 
@@ -20,13 +24,15 @@ class GithubMock(object):
 
     repos: Dict[str, GitRepo]
     pr_counter: Dict[str, int]
-    pr_info: Dict[int, PRInfo]
+    pr_info: Dict[str, Dict[int, PRInfo]]
+    pr_processes: Dict[int, Process]
 
     def __init__(self, travis: TravisMock):
         self.travis = travis
         self.repos = {}
         self.pr_counter = {}
-        self.pr_info = {}
+        self.pr_info = defaultdict(dict)
+        self.pr_processes = {}
 
     def _register_repo(self, repo_slug: str, repo: GitRepo):
         self.repos[repo_slug] = repo
@@ -39,15 +45,59 @@ class GithubMock(object):
         self._register_repo(slug_name, r)
         return r
 
-    def open_pull_request(self, dest_slug: str, dest_branch, slug: str, branch: str):
+    def open_pull_request(self, dest_slug: str, dest_branch, slug: str, branch: str, is_async=False):
+        print("""
+ ██████╗ ██████╗ ███████╗███╗   ██╗    ██████╗ ██████╗ 
+██╔═══██╗██╔══██╗██╔════╝████╗  ██║    ██╔══██╗██╔══██╗
+██║   ██║██████╔╝█████╗  ██╔██╗ ██║    ██████╔╝██████╔╝
+██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║    ██╔═══╝ ██╔══██╗
+╚██████╔╝██║     ███████╗██║ ╚████║    ██║     ██║  ██║
+ ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝    ╚═╝     ╚═╝  ╚═╝
+                                                       
+""")
+        print("From '{}:{}' to '{}:{}'".format(slug, branch, dest_slug, dest_branch))
         pr_num = self.pr_counter[slug]
         pr_num += 1
-        self.travis.fire_pr(pr_num, dest_slug, dest_branch, slug, branch)
-        self.pr_info[pr_num] = PRInfo(slug, branch, dest_slug, dest_branch)
+        args = (pr_num, dest_slug, dest_branch, slug, branch)
+        if is_async:
+            p = multiprocessing.Process(target=self.travis.fire_pr, args=args)
+            p.start()
+            self.pr_processes[pr_num] = p
+        else:
+            self.travis.fire_pr(*args)
+        self.pr_info[dest_slug][pr_num] = PRInfo(slug, branch, dest_slug, dest_branch)
         return pr_num
 
-    def merge_pull_request(self, pr_num: int):
-        info: PRInfo = self.pr_info[pr_num]
+    def wait_for_pr(self, pr_num: int):
+        if pr_num not in self.pr_processes:  # not async
+            return
+        p = self.pr_processes[pr_num]
+        while True:
+            if p.is_alive():
+                sleep(5)
+            else:
+                return
+
+    def merge_pull_request(self, slug, pr_num: int):
+        print("""
+███╗   ███╗███████╗██████╗  ██████╗ ███████╗    ██████╗ ██████╗ 
+████╗ ████║██╔════╝██╔══██╗██╔════╝ ██╔════╝    ██╔══██╗██╔══██╗
+██╔████╔██║█████╗  ██████╔╝██║  ███╗█████╗      ██████╔╝██████╔╝
+██║╚██╔╝██║██╔══╝  ██╔══██╗██║   ██║██╔══╝      ██╔═══╝ ██╔══██╗
+██║ ╚═╝ ██║███████╗██║  ██║╚██████╔╝███████╗    ██║     ██║  ██║
+╚═╝     ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝    ╚═╝     ╚═╝  ╚═╝
+                                                                
+""")
+
+        info: PRInfo = self.pr_info[slug][pr_num]
+        origin_repo = self.repos[info.slug_origin]
+
+        dest_repo = self.repos[info.slug_dest]
+
+        dest_repo.merge(info.branch_dest, origin_repo.folder, info.branch_origin,
+                        "Merging PR#{}".format(pr_num))
+
+        print("PR NUMBER: '{}' to {}/{}".format(pr_num, info.slug_dest, info.branch_dest))
         self.travis.fire_build(info.slug_dest,
                                info.branch_dest,
                                "Merged PR: #{}".format(pr_num),
