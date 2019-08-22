@@ -4,8 +4,9 @@ import tempfile
 from typing import Dict, List
 
 import requests
-from rtpy import Rtpy
+from rtpy import Rtpy, rtpy
 from rtpy.artifacts_and_storage import RtpyArtifactsAndStorage
+from rtpy.tools import RtpyBase
 
 from conan_ci.model.build import Build
 from conan_ci.model.build_configuration import BuildConfiguration
@@ -270,8 +271,21 @@ class Artifactory(object):
                 "copy": True,
                 "artifacts": True,
                 "dependencies": False,
-                "failFast": True}
-
-        self.af.builds._request("POST", "build/promote/{}/{}".format(build.name, build.number),
-                                "Promote build info", kwargs={},
-                                params={"Content-Type": "application/json"}, data=json.dumps(data))
+                "failFast": False}
+        # failFast is set to True because otherwise it fails. I assume it could be related with
+        # some artifacts already promoted (recipes not changing) or something like that.
+        # Similar to: https://www.jfrog.com/jira/browse/RTFACT-12087
+        try:
+            self.af.builds._request("POST",
+                                    "build/promote/{}/{}".format(build.name, build.number),
+                                    "Promote build info", kwargs={},
+                                    params={"Content-Type": "application/json"},
+                                    data=json.dumps(data))
+        except RtpyBase.AfApiError as exc:
+            print("WARN: No packages promoted!")
+            if exc.status_code == 400:  # Empty build info
+                return
+            raise
+        except Exception as e:
+            print(e)
+            raise

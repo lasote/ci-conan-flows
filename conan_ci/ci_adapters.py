@@ -4,11 +4,7 @@ from typing import Dict
 
 import requests
 
-from conan_ci.model.build import Build
-from conan_ci.model.build_configuration import BuildConfiguration
 from conan_ci.model.build_create_info import BuildCreateInfo
-from conan_ci.model.node_info import NodeInfo
-from conan_ci.model.repos_build import ReposBuild
 
 
 class TravisCIAdapter(object):

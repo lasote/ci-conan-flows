@@ -43,7 +43,7 @@ def chdir(newdir):
     try:
         yield
     finally:
-        if old_path:
+        if old_path and os.path.exists(old_path):
             os.chdir(old_path)
 
 

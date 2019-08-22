@@ -44,7 +44,7 @@ class ConanCreateJob(object):
         data = load(os.path.join(lock_folder, "conan.lock"))
         data = json.loads(data)
         for node_id, doc in data["graph_lock"]["nodes"].items():
-            if "modified" in doc and doc["modified"]:
+            if "modified" in doc and doc["modified"] == "Build":
                 return NodeInfo(node_id, doc["pref"])
         return None
 
@@ -116,11 +116,12 @@ class ConanCreateJob(object):
                                                        self.info.build_conf,
                                                        self.info.node_info)
 
-                if self.info.logger:
-                    node_info = self.get_built_node_id(build_folder)
-                    self.info.logger.add_node_stopped_building(node_info)
+                print("******************* BUILD NODE!!!: {}******************".format(self.info.node_info.ref))
+                node_info = self.get_built_node_id(build_folder)
+                self.info.logger.add_node_stopped_building(node_info)
+                print("******************* BUILD NODE LLAMADO!!!: {}******************".format(self.info.node_info))
 
-                # Upload the packageshttps://api.myjson.com/bins/15mvo5
+                # Upload the packages
                 runner.run('conan upload {} --all -r '
                            'upload_remote --force'.format(self.info.node_info.ref))
                 # Upload the modified lockfile to the right location

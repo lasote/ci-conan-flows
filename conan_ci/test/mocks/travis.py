@@ -4,11 +4,7 @@ import multiprocessing
 import tempfile
 from typing import Dict, Callable
 
-from conan_ci.model.build import Build
-from conan_ci.model.build_configuration import BuildConfiguration
 from conan_ci.model.build_create_info import BuildCreateInfo
-from conan_ci.model.node_info import NodeInfo
-from conan_ci.model.repos_build import ReposBuild
 from conan_ci.test.mocks.git import GitRepo
 from conan_ci.tools import environment_append, chdir
 

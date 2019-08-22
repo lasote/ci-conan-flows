@@ -138,6 +138,38 @@ class NodeChain(object):
         self.build = build
         self.art = repos.read.get_artifactory()
 
+    def run(self):
+        builder = BuildInfoBuilder(self.art)
+        print(os.getcwd())
+        profiles_names = self.repos.meta.get_profile_names()
+        projects_refs = self.repos.meta.get_projects_refs()
+        # TODO: We should do here the same than c3i, infos to calculate
+        #  different package id?
+        #  conan info <ref> -if=<path_to_lock> --use-lock --json
+        for project_ref in projects_refs:
+            for profile_name in profiles_names:
+                self._export_and_queue_modified_node(project_ref, profile_name)
+
+            # While there are jobs pending for the project...
+            print("Waiting for all jobs to be completed...")
+            while not self.ci_caller.empty_queue():
+                self.process_ended_nodes(project_ref)
+                delay_secs = int(os.getenv("CONAN_CI_CHECK_DELAY_SECONDS", "3"))
+                # Do not consume api calls limit checking
+                time.sleep(delay_secs)
+
+            # CALCULATE THE BUILD INFO
+            print("All jobs of the project completed!")
+            for profile_name in profiles_names:
+                with tmp_folder() as tmp_path:
+                    build_conf = BuildConfiguration(project_ref, profile_name)
+                    self.repos.meta.download_project_lock(tmp_path, self.build, build_conf)
+                    builder.process_lockfile(os.path.join(tmp_path, "conan.lock"))
+
+            bi = builder.get_build_info(self.build)
+            print(bi)
+            self.art.publish_build_info(bi)
+
     @staticmethod
     def _pref_to_ref(pref):
         return NodeChain._pref_to_ref_with_rrev(pref).split("#")[0]
@@ -153,10 +185,18 @@ class NodeChain(object):
         self.ci_caller.call_build(create_info)
 
     def _export_and_queue_modified_node(self, project_ref, profile_name):
+        build_conf = BuildConfiguration(project_ref, profile_name)
 
         with tmp_folder() as tmp_path:
             # Generate and upload the lock file for the project
             profile_path = self.repos.meta.download_profile(profile_name, tmp_path)
+
+            # To calculate the first lock only, the dev repo, we don't want to get
+            # stuff from other PRs
+            run('conan config set general.default_package_id_mode=package_revision_mode')
+            run('conan remote remove conan-center', ignore_failure=True)
+            run('conan remote add central_remote {}'.format(self.repos.read.url))
+            run('conan user -r central_remote -p')
             run("conan graph lock {} --profile {}".format(project_ref, profile_path))
             print("LOCK DESPUES DE CONAN GRAPH LOCK")
             self.print_lock(tmp_path)
@@ -171,15 +211,22 @@ class NodeChain(object):
             print("LOCK DESPUES DE EXPORT")
             self.print_lock(tmp_path)
 
-            run('conan upload {} -r upload_remote'.format(reference))
+            # Now we can add the other remote, the revisions are freeze already
+            if self.repos.read.url != self.repos.write.url:
+                run('conan remote add upload_remote {}'.format(self.repos.write.url))
+                run('conan user -r upload_remote -p')
+                run('conan upload {} -r upload_remote'.format(reference))
+            else:
+                # In a dev build, not a PR
+                run('conan upload {} -r central_remote'.format(reference))
 
             data = load(os.path.join(tmp_path, "conan.lock"))
-            self.logger.add_graph(self.build, json.loads(data))
+            self.logger.add_graph(self.build, build_conf, json.loads(data))
 
             # Get the nodes corresponding to the ref being modified
             # And queue all of them if they have been modified (no modified => FF)
             to_launch = self._get_first_group_to_build(tmp_path)
-            build_conf = BuildConfiguration(project_ref, profile_name)
+
             self.repos.meta.store_project_lock(tmp_path, self.build, build_conf)
             for new_node_id, new_pref in to_launch:
                 new_ref = self._pref_to_ref(new_pref)
@@ -187,6 +234,9 @@ class NodeChain(object):
                       " because it is missing".format(new_ref, profile_name, new_ref))
                 node_info = NodeInfo(new_node_id, new_ref)
                 self._call_build(build_conf, node_info)
+
+            # Clear generated packages
+            run('conan remove "*" -f')
 
     @staticmethod
     def print_lock(lock_folder):
@@ -274,49 +324,6 @@ class NodeChain(object):
         self.print_lock(project_lock_folder)
         print("First group: {}".format(ret))
         return ret
-
-    def run(self):
-        builder = BuildInfoBuilder(self.art)
-
-        run('conan config set general.default_package_id_mode=package_revision_mode')
-        run('conan remote remove conan-center', ignore_failure=True)
-        run('conan remote add upload_remote {}'.format(self.repos.write.url))
-        run('conan user -r upload_remote -p')
-        if self.repos.read.url != self.repos.write.url:
-            # Is the same remote when push to develop for example
-            run('conan remote add central_remote {}'.format(self.repos.read.url))
-            run('conan user -r central_remote -p')
-
-        profiles_names = self.repos.meta.get_profile_names()
-        projects_refs = self.repos.meta.get_projects_refs()
-        # TODO: We should do here the same than c3i, infos to calculate
-        #  different package id?
-        #  conan info <ref> -if=<path_to_lock> --use-lock --json
-        for project_ref in projects_refs:
-            for profile_name in profiles_names:
-                self._export_and_queue_modified_node(project_ref, profile_name)
-                # Clear generated packages
-                run('conan remove "*" -f')
-
-            # While there are jobs pending for the project...
-            print("Waiting for all jobs to be completed...")
-            while not self.ci_caller.empty_queue():
-                self.process_ended_nodes(project_ref)
-                delay_secs = int(os.getenv("CONAN_CI_CHECK_DELAY_SECONDS", "3"))
-                # Do not consume api calls limit checking
-                time.sleep(delay_secs)
-
-            # CALCULATE THE BUILD INFO
-            print("All jobs of the project completed!")
-            for profile_name in profiles_names:
-                with tmp_folder() as tmp_path:
-                    build_conf = BuildConfiguration(project_ref, profile_name)
-                    self.repos.meta.download_project_lock(tmp_path, self.build, build_conf)
-                    builder.process_lockfile(os.path.join(tmp_path, "conan.lock"))
-
-            bi = builder.get_build_info(self.build)
-            print(bi)
-            self.art.publish_build_info(bi)
 
     @staticmethod
     def inspect_name_and_version(folder):

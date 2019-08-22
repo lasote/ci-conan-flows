@@ -31,6 +31,7 @@ def run_command_output(command, cwd=None):
 
 def run(command, capture_output=True, ignore_failure=False):
     output = ""
+    print(">>>>>>> {}".format(os.getenv("CONAN_USER_HOME")))
     print(">>>>>>>> {}".format(command))
     if not capture_output:
         ret = os.system(command)

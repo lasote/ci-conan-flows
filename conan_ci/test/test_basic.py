@@ -94,7 +94,8 @@ class TestBasic(BaseTest):
 
     def test_quick(self):
         projects = ["P1/1.0@conan/stable"]
-        profiles = {"linux_gcc_64": linux_gcc_64}
+        profiles = {"linux_gcc_64": linux_gcc_64,
+                    "linux_gcc_32": linux_gcc_64.replace("x86_64", "x86")}
         self.populate_meta_repo(profiles, projects)
 
         tree = {"P1/1.0@conan/stable": ["AA/1.0@conan/stable"],
@@ -157,7 +158,7 @@ class TestBasic(BaseTest):
                     "conan install P1/1.0@conan/stable"]
         _, output = self.run_conan_commands(commands, package_id_mode="package_revision_mode")
         expected = """SELF FILE: Base P1/1.0@conan/stable contents
-P1/1.0@conan/stable: DEP FILE AA: Base AA/1.0@conan/stable contents
+P1/1.0@conan/stable: DEP FILE AA: Modified myfile: I'm modified AA
 P1/1.0@conan/stable: DEP FILE CC: Modified myfile: I'm modified CC
 P1/1.0@conan/stable: DEP FILE BB: Base BB/1.0@conan/stable contents
 """
