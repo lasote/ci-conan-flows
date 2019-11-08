@@ -115,7 +115,7 @@ class TestBasic(BaseTest):
         self.github.merge_pull_request("company/AA", pr_a)
 
 
-        input("stop")
+        input("stop. press a key")
 
     def test_merge_flow_basic(self):
         projects = ["P1/1.0@conan/stable"]

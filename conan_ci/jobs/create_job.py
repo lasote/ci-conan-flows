@@ -71,9 +71,11 @@ class ConanCreateJob(object):
 
             docker_image = self.get_docker_image_from_lockfile(build_folder)
             rcm = docker_runner(docker_image, [build_folder]) if docker_image else regular_runner()
+            # DEBUG CONAN CODE
+            # rcm = regular_runner()
 
             with rcm as runner:
-                if docker_image:  # FIXME: Issue locally
+                if False and docker_image:  # FIXME: Issue locally
                     runner.run("git clone https://github.com/conan-io/conan.git")
                     try:
                         runner.run("pip uninstall -y conan-package-tools")

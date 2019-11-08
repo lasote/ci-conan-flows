@@ -154,7 +154,7 @@ class NodeChain(object):
             print("Waiting for all jobs to be completed...")
             while not self.ci_caller.empty_queue():
                 self.process_ended_nodes(project_ref)
-                delay_secs = int(os.getenv("CONAN_CI_CHECK_DELAY_SECONDS", "3"))
+                delay_secs = int(os.getenv("CONAN_CI_CHECK_DELAY_SECONDS", "0"))
                 # Do not consume api calls limit checking
                 time.sleep(delay_secs)
 
